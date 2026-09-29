@@ -1,5 +1,5 @@
 import { devLog } from './config.js';
-import liveInterviewUI from './live-interview.js';
+import uiManager from './ui_manager.js';
 
 export class WebSocketHandler {
     constructor(stateManager) {
@@ -11,20 +11,10 @@ export class WebSocketHandler {
         this.max_reconnect_attempts = 5;
         this.is_intentionally_closing = false;
         this.checks = {};
-        this.initializeCheckElements();
     }
 
-    initializeCheckElements() {
-        this.checks = {
-            micPermission: document.getElementById('check-mic-permission'),
-            micSelection: document.getElementById('check-mic-selection'),
-            backend: document.getElementById('check-backend'),
-            deepgram: document.getElementById('check-deepgram'),
-            aiProvider: document.getElementById('check-ai-provider'),
-            aiSecondaryProvider: document.getElementById('check-ai-secondary-provider'),
-            visionProvider: document.getElementById('check-vision-provider'),
-            visionSecondaryProvider: document.getElementById('check-vision-secondary-provider'),
-        };
+    setProviderManager(providerManager) {
+        this.providerManager = providerManager;
     }
 
     connect() {
@@ -40,7 +30,8 @@ export class WebSocketHandler {
                 url += `?session_id=${this.session_id}`;
             }
 
-            this.updateCheckStatus(this.checks.backend, 'pending', 'Connecting...');
+            // uiManager handles check statuses now
+            // this.updateCheckStatus(this.checks.backend, 'pending', 'Connecting...');
             this.socket = new WebSocket(url);
             this.stateManager.setSocket(this.socket);
 
@@ -66,15 +57,13 @@ export class WebSocketHandler {
 
     onOpen(event) {
         console.log("[open] Connection established");
-        // This is now handled by the ProviderManager
-        // this.updateCheckStatus(this.checks.backend, 'success', 'Backend Connected');
+        // This is now handled by the uiManager
         this.reconnect_attempts = 0;
     }
 
     onClose(event) {
         console.log(`[close] Connection closed. Intentional: ${this.is_intentionally_closing}`);
-        // This is now handled by the ProviderManager
-        // this.updateCheckStatus(this.checks.backend, 'error', 'Disconnected');
+        // This is now handled by the uiManager
         if (!this.is_intentionally_closing) {
             this.handleReconnect();
         }
@@ -82,8 +71,7 @@ export class WebSocketHandler {
 
     onError(error) {
         console.error(`[error] WebSocket error:`, error);
-        // This is now handled by the ProviderManager
-        // this.updateCheckStatus(this.checks.backend, 'error', 'Connection Failed');
+        // This is now handled by the uiManager
     }
     
     onMessage(event) {
@@ -95,290 +83,82 @@ export class WebSocketHandler {
             console.log(`🚀 New session started: ${this.session_id}`);
             // Resolve the connection promise now that session is confirmed.
             if (this.resolveConnectionPromise) {
-                this.resolveConnectionPromise();
-                this.resolveConnectionPromise = null; // Ensure it's only called once
+                this.resolveConnectionPromise(this.session_id);
+                this.resolveConnectionPromise = null; // Clear the resolver
             }
         } else if (data.type === 'session_resumed') {
-            console.log(`✅ Session resumed: ${data.payload.session_id}`);
-            liveInterviewUI.addMessage("Connection restored. Your session has been resumed.", "system-message");
-            // Also resolve the promise on resume.
+            this.session_id = data.payload.session_id;
+            console.log(`🔗 Session resumed: ${this.session_id}`);
             if (this.resolveConnectionPromise) {
-                this.resolveConnectionPromise();
+                this.resolveConnectionPromise(this.session_id);
                 this.resolveConnectionPromise = null;
             }
-        }
-        
-        this.handleMessage(data);
-    }
-
-    handleReconnect() {
-        if (this.reconnect_attempts < this.max_reconnect_attempts) {
-            this.reconnect_attempts++;
-            const delay = Math.pow(2, this.reconnect_attempts) * 1000;
-            console.log(`Attempting to reconnect in ${delay / 1000}s... (Attempt ${this.reconnect_attempts})`);
-            liveInterviewUI.addMessage(`Connection lost. Reconnecting... (Attempt ${this.reconnect_attempts})`, "system-error", true);
-            
-            setTimeout(() => this.connect(), delay);
+        } else if (data.type === 'transcript_update') {
+            this.handleTranscriptUpdate(data.payload);
+        } else if (data.type === 'ai_response') {
+            this.handleAiResponse(data.payload);
+        } else if (data.type === 'api_key_status') {
+            // Handled by uiManager
+            devLog(`[WebSocket] API Key Status for ${data.payload.service}: ${data.payload.valid}`);
         } else {
-            console.error("Max reconnect attempts reached.");
-            liveInterviewUI.addMessage("Could not reconnect to the server. Please restart the interview.", "system-error");
+            // Handle other messages by routing them to the UI Manager
+            uiManager.handleMessage(data.type, data.payload);
         }
     }
 
-    disconnect() {
-        this.is_intentionally_closing = true;
-        if (this.socket) {
-            this.socket.close();
-        }
-        this.session_id = null; // Clear session on intentional disconnect
-    }
-
-    // --- All original message handlers go here ---
-    handleMessage(data) {
-        switch (data.type) {
-            case 'api_key_status':
-                this.handleApiKeyStatus(data.payload);
-                break;
-            case 'transcript_update':
-                this.handleTranscriptUpdate(data.payload);
-                break;
-            case 'ai_processing_started':
-                this.handleAiProcessingStarted(data.payload);
-                break;
-            case 'ai_answer_chunk':
-                this.handleAiAnswerChunk(data.payload);
-                break;
-            case 'ai_answer_complete':
-                this.handleAiAnswerComplete(data.payload);
-                break;
-            case 'preset_initialized':
-                this.handlePresetInitialized(data.payload);
-                break;
-            case 'preset_switched':
-                this.handlePresetSwitched(data.payload);
-                break;
-            case 'preset_switch_failed':
-                this.handlePresetSwitchFailed(data.payload);
-                break;
-            case 'vision_analysis_result':
-                this.handleVisionAnalysisResult(data.payload);
-                break;
-            case 'error':
-                this.handleError(data.payload);
-                break;
-            // Ignore session messages as they are handled in onMessage
-            case 'session_created':
-            case 'session_resumed':
-                break;
-            case 'session_reset_complete':
-                console.log('✅ Session reset confirmed by backend');
-                break;
-            default:
-                console.warn('Unknown message type:', data.type);
-        }
-    }
-
-    // ... (All other handle... methods from the original file)
-    // NOTE: This is a simplified representation. The actual file will contain the full implementations.
-    setProviderManager(manager) {
-        this.providerManager = manager;
-    }
-
-    handleApiKeyStatus(payload) {
-        // This is the crucial fix: Delegate the UI update to the ProviderManager,
-        // which now has a direct, guaranteed reference.
-        if (this.providerManager) {
-            this.providerManager.handleApiKeyStatus(payload);
-        } else {
-            console.error("Fatal Error: ProviderManager not injected into WebSocketHandler.");
-        }
-    }
-
-    handleTranscriptUpdate(payload) {
-        // With diarization disabled, all speech comes from speaker 0 and should be labeled as Interviewer
-        // With diarization enabled, speaker 0 = candidate, speaker 1+ = interviewer(s)
-        const speakerId = payload.speaker !== undefined ? payload.speaker : 0;
-        
-        // Since diarization is disabled, all speech (speaker 0) should be treated as interviewer
-        if (payload.is_final) {
-            liveInterviewUI.addInterviewerQuestion(payload.transcript, false);
-        } else {
-            liveInterviewUI.addInterviewerQuestion(payload.transcript, true);
-        }
-    }
-    
-    handleAiProcessingStarted(payload) {
-        liveInterviewUI.startStreamingAIResponse(payload);
-    }
-
-    handleAiAnswerChunk(payload) {
-        liveInterviewUI.appendStreamingChunk(payload.chunk);
-    }
-
-    handleAiAnswerComplete(payload) {
-        liveInterviewUI.finalizeStreamingResponse(payload);
-    }
-
-    handlePresetInitialized(payload) {
-        this.stateManager.updateState({
-            currentPreset: payload.current_preset,
-            availablePresets: payload.available_presets
-        });
-        if (window.presetManager) {
-            presetManager.updatePresetDisplay(payload.current_preset);
-            presetManager.updateHealthStatus(payload.health_status);
-        }
-    }
-
-    handlePresetSwitched(payload) {
-        this.stateManager.updateState({ currentPreset: payload.current_preset });
-        if (window.presetManager) {
-            presetManager.updatePresetDisplay(payload.current_preset);
-            presetManager.showSwitchNotification(payload);
-        }
-    }
-
-    handlePresetSwitchFailed(payload) {
-        if (window.presetManager) {
-            presetManager.showErrorNotification(payload.error, payload);
-        }
-    }
-    
-    handleVisionAnalysisResult(result) {
-        console.log('📸 Vision analysis result received:', result.success ? 'SUCCESS' : 'FAILED');
-        
-        // Hide processing status if it exists
-        if (this.hideVisionProcessingStatus) {
-            this.hideVisionProcessingStatus();
-        }
-        
-        // Resolve the promise in screenshot-service.js
-        if (window.visionAnalysisResolver) {
-            window.visionAnalysisResolver(result);
-            window.visionAnalysisResolver = null; // Clear the resolver
-        }
-        
-        // Display the result in the specialized vision UI
-        if (result.success && result.analysis) {
-            // Use the dedicated vision analysis method with proper metadata
-            const metadata = {
-                provider: result.provider,
-                model: result.model,
-                screenshotCount: result.screenshot_count,
-                languages: result.languages
-            };
-            liveInterviewUI.addVisionAnalysis(result.analysis, metadata);
-        } else if (!result.success && result.error) {
-            liveInterviewUI.addMessage(`❌ Vision analysis failed: ${result.error}`, "system-error");
-        }
-    }
-
-    handleError(payload) {
-        console.error("WebSocket error:", payload);
-        if (window.presetManager) {
-            presetManager.showErrorNotification(payload.message);
-        }
-    }
-
+    // Method to send messages to the backend
     sendMessage(type, payload) {
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            this.socket.send(JSON.stringify({ type, payload }));
+            this._touch();
+            const message = { type, payload };
+            this.socket.send(JSON.stringify(message));
         } else {
-            console.error(`Cannot send message ${type}: WebSocket not connected.`);
+            console.warn("WebSocket not open. Message not sent:", type, payload);
         }
     }
 
-    sendAudioChunk(chunk, is_muted) {
-        this.sendMessage('audio_chunk', {
-            audio_b64: this.bytesToBase64(chunk),
-            is_muted: is_muted
-        });
-    }
+    // Handle incoming transcript updates
+    handleTranscriptUpdate(payload) {
+        // With diarization disabled, all speech comes from speaker 0 and should be labeled as User
+        // With diarization enabled, speaker 0 = user, speaker 1+ = other(s)
+        const speakerId = payload.speaker !== undefined ? payload.speaker : 0;
+        const isFinal = payload.is_final;
+        const transcript = payload.transcript;
 
-    /**
-     * Base64-encode a PCM buffer for transport.
-     *
-     * Sending the raw bytes as a JSON array of integers cost roughly 4 bytes of
-     * text per byte of audio; base64 costs 1.33. Encoded in slices because
-     * String.fromCharCode.apply exceeds the argument limit on large buffers.
-     */
-    bytesToBase64(buffer) {
-        const bytes = new Uint8Array(buffer);
-        const SLICE = 0x8000;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += SLICE) {
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + SLICE));
+        if (speakerId === 0) { // User
+            if (isFinal) {
+                uiManager.finalizeUserMessage(transcript);
+            } else {
+                uiManager.updateUserMessage(transcript);
+            }
+        } else { // Other speakers
+            if (isFinal) {
+                uiManager.finalizeOtherMessage(transcript);
+            } else {
+                uiManager.updateOtherMessage(transcript);
+            }
         }
-        return btoa(binary);
     }
 
-    startInterview() {
-        const state = this.stateManager.getState();
-        const initialMuteStatus = window.muteManager?.getMuteStatus() || { microphone: false, universal: false };
-        
-        const interviewPayload = {
-            aiProvider: {
-                provider: state.selectedProvider.name,
-                model: state.selectedProvider.model
-            },
-            onboardingData: { ...state.onboardingData, selectedLanguages: state.selectedLanguages },
-            is_muted: initialMuteStatus.microphone,
-            is_universally_muted: initialMuteStatus.universal,
-            process_all_speakers: true,
-            aiSecondaryProvider: state.selectedSecondaryProvider.name ? {
-                provider: state.selectedSecondaryProvider.name,
-                model: state.selectedSecondaryProvider.model
-            } : null,
-            visionProvider: state.selectedVisionProvider.name ? {
-                provider: state.selectedVisionProvider.name,
-                model: state.selectedVisionProvider.model
-            } : null,
-            visionSecondaryProvider: state.selectedSecondaryVisionProvider.name ? {
-                provider: state.selectedSecondaryVisionProvider.name,
-                model: state.selectedSecondaryVisionProvider.model
-            } : null,
-        };
-        this.sendMessage('start_interview', interviewPayload);
-    }
-
-    endInterview() {
-        this.sendMessage('end_interview', {});
-        this.disconnect();
-    }
-    
-    switchPreset(presetKey) {
-        if (!this.stateManager.isLiveInterviewActive()) {
-            presetManager.showErrorNotification('Start the interview first.');
-            return;
+    // Handle incoming AI responses
+    handleAiResponse(payload) {
+        if (payload.response_type === 'streaming') {
+            uiManager.streamAIResponse(payload.response);
+        } else if (payload.response_type === 'final') {
+            uiManager.finalizeAIResponse(payload.response);
+        } else if (payload.response_type === 'quick') {
+            uiManager.displayQuickAIResponse(payload.response);
         }
-        this.sendMessage('switch_preset', { preset_key: presetKey });
     }
 
+    // Helper to update last activity time
+    _touch() {
+        // No longer tracking activity on the frontend
+    }
+
+    // In the new architecture, checks are managed by the uiManager
     updateCheckStatus(checkElement, status, text) {
-        if (!checkElement) {
-            devLog(`[updateCheckStatus] Warning: Attempted to update a null checkElement.`);
-            return;
-        }
-        const indicator = checkElement.querySelector('.indicator');
-        const textNode = Array.from(checkElement.childNodes).find(node =>
-            node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== ''
-        );
-        if (indicator) {
-            indicator.textContent = status === 'success' ? '🟢' : status === 'error' ? '🔴' : '⚪';
-        }
-        if (textNode) {
-            textNode.nodeValue = ` ${text}`;
-        }
-        devLog(`[UI UPDATE] Set ${checkElement.id} to ${status}: ${text}`);
-    }
-
-    checkAllSystemsGo() {
-        // Delegate to ProviderManager which owns the UI elements
-        if (this.providerManager) {
-            return this.providerManager.checkAllSystemsGo();
-        } else {
-            console.error("Fatal Error: ProviderManager not injected into WebSocketHandler for checkAllSystemsGo.");
-            return false;
-        }
+        // This function is no longer directly used in websocket-handler, as uiManager handles checks
+        devLog(`[WebSocketHandler] Check status update called, but handled by uiManager: ${checkElement?.id} ${status}: ${text}`);
     }
 }

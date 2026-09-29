@@ -5,8 +5,9 @@ from datetime import datetime
 from openai import AsyncOpenAI, APIStatusError
 from core.config import settings
 from core.key_utils import usable_keys
-from core.prompts import get_interview_answer_prompt, get_quick_response_prompt
+from core.prompts import get_chat_prompt, get_suggestion_prompt, get_automation_prompt, get_quick_response_prompt
 from services.context_manager import PersistentContextManager
+from services.memory_service import memory_service
 import threading
 
 # --- Enhanced LLMManager Class ---
@@ -92,7 +93,7 @@ class LLMManager:
             }
         
         if not self.context_manager or not self.context_manager.ensure_context_available():
-            return "I'm sorry, candidate context is not properly initialized.", {
+            return "I'm sorry, the session context is not properly initialized.", {
                 "error": "Context not available",
                 "provider": self.provider_name,
                 "model": self.model_name
@@ -104,7 +105,7 @@ class LLMManager:
         # Generate prompt with persistent context.
         # GENERATE_FULL_ANSWERS=false routes to the short-form prompt.
         if settings.GENERATE_FULL_ANSWERS:
-            prompt = get_interview_answer_prompt(question, self.context_manager)
+            prompt = get_chat_prompt(question, self.context_manager)
         else:
             prompt = get_quick_response_prompt(question, self.context_manager)
         
@@ -210,11 +211,11 @@ class LLMManager:
             "model": self.model_name
         }
 
-    def process_candidate_response(self, response: str):
-        """Processes the candidate's response to add to conversation context."""
-        if settings.TRACK_CANDIDATE_RESPONSES and response.strip() and self.context_manager:
+    def process_user_response(self, response: str):
+        """Processes the user's response to add to conversation context."""
+        if settings.TRACK_USER_RESPONSES and response.strip() and self.context_manager:
             self.context_manager.add_conversation_exchange(None, response)
-            print("📝 Conversation context updated with candidate response")
+            print("📝 Conversation context updated with user speech")
 
     def get_status(self) -> Dict[str, Any]:
         """Get current status of this LLM manager"""
@@ -228,6 +229,37 @@ class LLMManager:
         }
 
 # --- Multi-LLM Manager Class ---
+
+    async def get_general_answer(self, question: str, context_manager=None):
+        """Get a general-purpose answer using learned context."""
+        ctx = context_manager or self.context_manager
+        if ctx:
+            from core.prompts import get_chat_prompt
+            prompt = get_chat_prompt(question, ctx)
+        else:
+            from core.prompts import get_quick_response_prompt
+            prompt = get_quick_response_prompt(question, None)
+        return await self.get_ai_answer(prompt, None)
+
+    async def get_suggestions(self, context=None):
+        """Generate real-time suggestions using LLM and learned context."""
+        from core.prompts import get_suggestion_prompt
+        situation = context.get('situation', 'User is active') if context else 'User is active'
+        suggestion_prompt = get_suggestion_prompt(situation, self.context_manager)
+        answer, result_info = await self.get_ai_answer(suggestion_prompt, None)
+        if result_info.get('success'):
+            return [line.strip() for line in answer.split('\n') if line.strip().startswith(('-', '*', '1.', '2.', '3.'))]
+        return []
+
+    async def detect_automations(self, context=None):
+        """Detect automation opportunities using learned context."""
+        from core.prompts import get_automation_prompt
+        situation = context.get('situation', 'Looking for automation opportunities') if context else 'Looking for automation opportunities'
+        automation_prompt = get_automation_prompt(situation, self.context_manager)
+        answer, result_info = await self.get_ai_answer(automation_prompt, None)
+        if result_info.get('success'):
+            return [line.strip() for line in answer.split('\n') if line.strip().startswith(('-', '*', '1.', '2.', '3.'))]
+        return []
 
 class MultiLLMManager:
     """Enhanced LLM Manager supporting multiple providers with shared context and comprehensive error handling"""
@@ -332,10 +364,10 @@ class MultiLLMManager:
                 return model
         raise ValueError(f"Model '{model_identifier}' not found for provider '{provider_config['name']}'")
 
-    def initialize_candidate_context(self, onboarding_data: Dict[str, Any]):
-        """Initialize shared candidate context"""
+    def initialize_user_context(self, onboarding_data: Dict[str, Any]):
+        """Initialize shared user context"""
         self.shared_context.initialize_persistent_context(onboarding_data)
-        print(f"🔒 Shared context initialized for candidate: {onboarding_data.get('name', 'Unknown')}")
+        print(f"🔒 Shared context initialized (persona: {onboarding_data.get('persona_id', 'general_chat')})")
 
     async def perform_health_checks(self) -> Dict[str, bool]:
         """Perform health checks on all providers"""
@@ -478,10 +510,10 @@ class MultiLLMManager:
             "attempted_providers": list(self.providers.keys())
         }
 
-    def process_candidate_response(self, response: str):
-        """Process candidate response using active provider"""
+    def process_user_response(self, response: str):
+        """Process user response using active provider"""
         if self.active_preset_key in self.providers:
-            self.providers[self.active_preset_key].process_candidate_response(response)
+            self.providers[self.active_preset_key].process_user_response(response)
 
     def get_system_status(self) -> Dict[str, Any]:
         """Get comprehensive system status"""

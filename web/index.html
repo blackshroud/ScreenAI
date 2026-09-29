@@ -4,9 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aura</title>
+    <title>ScreenCopilot</title>
     <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/live-interview.css">
+    <link rel="stylesheet" href="/static/css/live-copilot.css"> <!-- New CSS for general copilot view -->
     <link rel="stylesheet" href="/static/css/markdown-styles.css">
     <link rel="stylesheet" href="/static/css/hotkeys.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,320 +21,44 @@
 
 <body>
 
-    <!-- Stage 1: Onboarding -->
-    <div id="onboarding-view" class="view active">
-        <div class="container">
-            <div class="brand-header">
-                <div class="brand-logo">AURA</div>
-                <span class="brand-tagline">AI Interview Coach</span>
-            </div>
-            <p class="subtitle">Set up your profile, AI preferences, and API credentials.</p>
-
-            <!-- Tab Navigation -->
-            <div class="tabs-nav">
-                <button class="tab-btn active" data-tab="profile-tab">1. Your Profile</button>
-                <button class="tab-btn" data-tab="ai-setup-tab">2. AI Setup</button>
-                <button class="tab-btn" data-tab="advanced-config-tab">3. Advanced Config</button>
-                <button class="tab-btn" data-tab="commands-tab">4. Commands & Tips</button>
-            </div>
-
-            <div class="tab-content">
-                <!-- Tab 1: Profile -->
-                <div id="profile-tab" class="tab-pane active">
-                    <div class="onboarding-grid">
-                        <fieldset class="grid-span-1">
-                            <legend>Candidate Profile <button type="button" id="fill-demo-btn" class="demo-fill-btn"
-                                    title="Fill with demo data">⚡ Demo</button></legend>
-                            <input type="text" id="user-name" placeholder="Your Name" required>
-                            <input type="text" id="user-company" placeholder="Company You're Interviewing With"
-                                required>
-                            <input type="text" id="user-role" placeholder="Target Role" required>
-                            <textarea id="user-resume" placeholder="Paste your resume text here..." required></textarea>
-                        </fieldset>
-
-                        <fieldset class="grid-span-1">
-                            <legend>Interview Focus</legend>
-                            <div class="checkbox-group">
-                                <label><input type="checkbox" name="focus" value="behavioral"> Behavioral</label>
-                                <label><input type="checkbox" name="focus" value="system-design"> System Design</label>
-                                <label><input type="checkbox" name="focus" value="dsa"> Data Structures &
-                                    Algorithms</label>
-                                <label><input type="checkbox" name="focus" value="coding"> Coding</label>
-                                <label><input type="checkbox" name="focus" value="cultural-fit"> Cultural Fit</label>
-                                <label><input type="checkbox" name="focus" value="hr"> HR / Screening</label>
-                            </div>
-                        </fieldset>
-                    </div>
-                    <fieldset>
-                        <legend>Job Description / Requirements</legend>
-                        <textarea id="user-objectives"
-                            placeholder="Paste the job description or key requirements here to give the AI context."></textarea>
-                    </fieldset>
-                </div>
-
-                <!-- Tab 2: AI Setup -->
-                <div id="ai-setup-tab" class="tab-pane">
-                    <fieldset>
-                        <legend>AI Configuration</legend>
-                        <div class="ai-config-section">
-                            <div class="ai-config-primary">
-                                <h4>Primary AI Model (Default)</h4>
-                                <div class="ai-config-group">
-                                    <select id="ai-provider-select" aria-label="Primary AI provider" required>
-                                        <option value="">Select AI Provider</option>
-                                    </select>
-                                    <select id="ai-model-select" aria-label="Primary AI model" disabled required>
-                                        <option value="">Select Model</option>
-                                    </select>
-                                </div>
-                                <small class="config-hint">Primary model will be used by default for all
-                                    responses</small>
-                            </div>
-
-                            <div class="ai-config-secondary">
-                                <h4>Secondary AI Model (Optional)</h4>
-                                <div class="ai-config-group">
-                                    <select id="ai-secondary-provider-select" aria-label="Secondary AI provider">
-                                        <option value="">Select Secondary Provider (Optional)</option>
-                                    </select>
-                                    <select id="ai-secondary-model-select" aria-label="Secondary AI model" disabled>
-                                        <option value="">Select Secondary Model</option>
-                                    </select>
-                                </div>
-                                <small class="config-hint">Switch to secondary model anytime with Alt+W hotkey during
-                                    interview</small>
-                            </div>
-
-                            <div class="preset-info">
-                                <h4>Quick Switch Hotkeys</h4>
-                                <div class="hotkey-list">
-                                    <span class="hotkey-item"><kbd>Alt+Q</kbd> Primary Model</span>
-                                    <span class="hotkey-item"><kbd>Alt+W</kbd> Secondary Model</span>
-                                    <span class="hotkey-item"><kbd>Alt+E</kbd> Auto-Select Best</span>
-                                </div>
-                            </div>
-                        </div>
-                    </fieldset>
-
-                    <fieldset>
-                        <legend>Vision AI Configuration (Optional)</legend>
-                        <div class="vision-config-section">
-                            <div class="vision-config-primary">
-                                <h4>Primary Vision Model (Default)</h4>
-                                <div class="ai-config-group">
-                                    <select id="vision-provider-select" aria-label="Primary vision provider">
-                                        <option value="">Select Vision Provider (Optional)</option>
-                                    </select>
-                                    <select id="vision-model-select" aria-label="Primary vision model" disabled>
-                                        <option value="">Select Vision Model</option>
-                                    </select>
-                                </div>
-                                <small class="config-hint">Primary vision model for screenshot analysis and code
-                                    solutions</small>
-                            </div>
-
-                            <div class="vision-config-secondary">
-                                <h4>Secondary Vision Model (Optional)</h4>
-                                <div class="ai-config-group">
-                                    <select id="vision-secondary-provider-select" aria-label="Secondary vision provider">
-                                        <option value="">Select Secondary Vision Provider (Optional)</option>
-                                    </select>
-                                    <select id="vision-secondary-model-select" aria-label="Secondary vision model" disabled>
-                                        <option value="">Select Secondary Vision Model</option>
-                                    </select>
-                                </div>
-                                <small class="config-hint">Switch to secondary vision model with Alt+T during vision
-                                    mode</small>
-                            </div>
-
-                            <div class="programming-languages">
-                                <h4>Preferred Programming Languages (Optional)</h4>
-                                <div class="language-selector">
-                                    <div class="checkbox-group">
-                                        <label><input type="checkbox" name="language" value="python"> Python</label>
-                                        <label><input type="checkbox" name="language" value="javascript">
-                                            JavaScript</label>
-                                        <label><input type="checkbox" name="language" value="java"> Java</label>
-                                        <label><input type="checkbox" name="language" value="cpp"> C++</label>
-                                        <label><input type="checkbox" name="language" value="csharp"> C#</label>
-                                        <label><input type="checkbox" name="language" value="go"> Go</label>
-                                        <label><input type="checkbox" name="language" value="rust"> Rust</label>
-                                        <label><input type="checkbox" name="language" value="react or typescript"> React
-                                            or TypeScript</label>
-                                        <label><input type="checkbox" name="language" value="sql"> SQL</label>
-                                    </div>
-                                </div>
-                                <small class="config-hint">Select languages for code solutions and explanations</small>
-                            </div>
-                        </div>
-                    </fieldset>
-                </div>
-
-                <!-- Tab 3: Advanced Configuration -->
-                <div id="advanced-config-tab" class="tab-pane">
-                    <fieldset>
-                        <legend>API Credentials & Model Management</legend>
-                        <div class="advanced-info-box">
-                            <p>Manage raw API keys and model lists for all available providers. Changes saved here will
-                                modify <code>ai_providers.json</code> and <code>.env</code>.</p>
-                        </div>
-
-                        <div class="deepgram-config">
-                            <h4>Deepgram API (Speech-to-Text)</h4>
-                            <div class="config-row">
-                                <input type="password" id="adv-deepgram-key" placeholder="DEEPGRAM_API_KEY">
-                                <button id="save-deepgram-btn" class="save-small">Save Key</button>
-                            </div>
-                            <small class="config-hint">Stored in <code>.env</code> file</small>
-                        </div>
-
-                        <div class="providers-table-container">
-                            <table class="providers-table">
-                                <thead>
-                                    <tr>
-                                        <th>Provider</th>
-                                        <th>API Keys</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="adv-providers-list">
-                                    <!-- Providers will be generated here -->
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div class="advanced-actions">
-                            <button id="save-all-providers-btn">Save All Provider Changes</button>
-                        </div>
-                    </fieldset>
-                </div>
-
-                <!-- Tab 4: Commands & Pro-Tips -->
-                <div id="commands-tab" class="tab-pane">
-                    <div class="commands-layout">
-                        <div class="pro-tips-section">
-                            <div class="pro-tip-card">
-                                <h4>🥷 Stealth Professional Tip</h4>
-                                <p>Always interact with the app using <strong>Global Hotkeys</strong>. Clicking on the
-                                    window during a proctored exam may trigger focus-detection alerts from monitoring
-                                    software.</p>
-                            </div>
-                            <div class="pro-tip-card vision">
-                                <h4>📸 Multi-Screenshot Analysis</h4>
-                                <p>You can capture multiple screenshots with <kbd>Alt+S</kbd> to build a queue, then
-                                    process them all at once with <kbd>Alt+P</kbd>. This is highly recommended for
-                                    complex multi-part coding questions.</p>
-                            </div>
-                            <div class="pro-tip-card performance">
-                                <h4>⚡ Speed Strategy</h4>
-                                <p>If your primary AI model is lagging, use <kbd>Alt+E</kbd> to immediately trigger
-                                    Auto-Select. Aura will switch you to the fastest healthy provider available.</p>
-                            </div>
-                        </div>
-
-                        <div class="commands-grid">
-                            <div class="command-category">
-                                <h5>🎭 Stealth & Appearance</h5>
-                                <ul class="command-list">
-                                    <li><kbd>Alt+X</kbd> <span>Toggle Ghost Mode (Click-through)</span></li>
-                                    <li><kbd>Alt+Z</kbd> <span>Toggle Visibility (Show/Hide)</span></li>
-                                    <li><kbd>Alt+1</kbd> <span>Set Transparent (40% Opacity)</span></li>
-                                    <li><kbd>Alt+2</kbd> <span>Set Semi-Opaque (70% Opacity)</span></li>
-                                    <li><kbd>Alt+3</kbd> <span>Set Fully Opaque (100% Opacity)</span></li>
-                                </ul>
-                            </div>
-
-                            <div class="command-category">
-                                <h5>🧠 AI Model Control</h5>
-                                <ul class="command-list">
-                                    <li><kbd>Alt+Q</kbd> <span>Switch to Primary Preset</span></li>
-                                    <li><kbd>Alt+W</kbd> <span>Switch to Secondary Preset</span></li>
-                                    <li><kbd>Alt+E</kbd> <span>Auto-Select Best Available</span></li>
-                                    <li><kbd>Alt+T</kbd> <span>Switch Vision AI Model</span></li>
-                                </ul>
-                            </div>
-
-                            <div class="command-category">
-                                <h5>👁️ Vision AI Actions</h5>
-                                <ul class="command-list">
-                                    <li><kbd>Alt+V</kbd> <span>Toggle Vision Mode Overlay</span></li>
-                                    <li><kbd>Alt+S</kbd> <span>Capture/Queue Screenshot</span></li>
-                                    <li><kbd>Alt+P</kbd> <span>Process Screenshot Queue</span></li>
-                                    <li><kbd>Alt+R</kbd> <span>Clear Screenshot Queue</span></li>
-                                </ul>
-                            </div>
-
-                            <div class="command-category">
-                                <h5>🕹️ Interaction & Utils</h5>
-                                <ul class="command-list">
-                                    <li><kbd>Alt+M</kbd> <span>Toggle Mic Mute</span></li>
-                                    <li><kbd>Alt+U</kbd> <span>Universal Pause/Mute</span></li>
-                                    <li><kbd>Alt+O</kbd> <span>Reset Interview Session</span></li>
-                                    <li><kbd>Alt+↑/↓</kbd> <span>Continuous Scrolling</span></li>
-                                    <li><kbd>Alt+Arrows</kbd> <span>Move Window Precision</span></li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <button id="proceed-to-checks">Proceed to Device Setup</button>
-        </div>
-    </div>
-
-    <!-- Stage 2: Pre-Flight Check -->
-    <div id="preflight-view" class="view">
-        <div class="container">
-            <h1>Aura Pre-Flight Check</h1>
-            <div id="checks">
-                <div class="check-item" id="check-mic-permission"><span class="indicator">⚪</span> Microphone Permission
-                </div>
-                <div class="check-item" id="check-mic-selection"><span class="indicator">⚪</span> Microphone Selection
-                    <select id="mic-select" aria-label="Microphone device" disabled></select>
-                </div>
-                <div class="check-item" id="check-backend"><span class="indicator">⚪</span> Backend Connection</div>
-                <div class="check-item" id="check-deepgram"><span class="indicator">⚪</span> Deepgram API</div>
-                <div class="check-item" id="check-ai-provider"><span class="indicator">⚪</span> Primary AI Provider
-                </div>
-                <div class="check-item" id="check-ai-secondary-provider" style="display: none;"><span
-                        class="indicator">⚪</span> Secondary AI Provider</div>
-                <div class="check-item" id="check-vision-provider" style="display: none;"><span
-                        class="indicator">⚪</span> Primary Vision AI Provider</div>
-                <div class="check-item" id="check-vision-secondary-provider" style="display: none;"><span
-                        class="indicator">⚪</span> Secondary Vision AI Provider</div>
-            </div>
-            <div class="preflight-buttons">
-                <button id="back-to-onboarding-btn">Back</button>
-                <button id="start-interview-button" disabled>Start Interview</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Stage 3: Live Interview -->
-    <div id="live-view" class="view">
-        <div class="live-interview-container">
+    <!-- Main Copilot View -->
+    <div id="copilot-view" class="view active">
+        <div class="copilot-container">
             <!-- Header -->
-            <div class="live-header">
-                <div class="live-status">
+            <div class="copilot-header">
+                <div class="copilot-status">
                     <div class="status-indicator recording"></div>
-                    <span>Live Interview Session</span>
+                    <span>ScreenCopilot Session</span>
                 </div>
                 <div class="header-controls">
-                    <button id="mute-btn" class="mute-btn" title="Mute microphone input to app (Alt+M)">
+                    <select id="persona-select" aria-label="Select AI Persona">
+                        <!-- Options will be dynamically loaded by JavaScript -->
+                    </select>
+                    <button id="mute-btn" class="mute-btn" title="Mute microphone input (Alt+M)">
                         <span class="mute-icon">🎤</span>
                         <span class="mute-text">Mute</span>
                     </button>
-                    <button id="reset-interview-btn" class="reset-btn">Reset</button>
-                    <button id="end-interview-btn" class="end-btn">End Interview</button>
+                    <button id="reset-session-btn" class="reset-btn" title="Reset session context (Alt+O)">Reset</button>
+                    <button id="end-session-btn" class="end-btn" title="End session">End Session</button>
                 </div>
             </div>
 
             <!-- Main Content Area -->
-            <div class="interview-content">
+            <div class="copilot-content">
                 <div class="conversation-stream" id="conversation-stream">
                     <!-- Dynamic content will be added here -->
+                    <div class="initial-message">
+                        <h1>Welcome to ScreenCopilot!</h1>
+                        <p>Select a persona above to get started or just ask me anything.</p>
+                        <p>Use global hotkeys for seamless interaction (e.g., Alt+S to screenshot).</p>
+                    </div>
                 </div>
+            </div>
+
+            <!-- User Input Area -->
+            <div class="user-input-area">
+                <textarea id="user-question-input" placeholder="Ask ScreenCopilot anything..." rows="1"></textarea>
+                <button id="send-question-btn" title="Send your question">Send</button>
             </div>
 
             <!-- Current Activity Indicator -->
@@ -347,8 +71,6 @@
         </div>
     </div>
 
-    <script type="module" src="/static/js/preset-manager.js"></script>
-    <script type="module" src="/static/js/screenshot-service.js"></script>
     <script type="module" src="/static/js/main.js"></script>
 
 </body>

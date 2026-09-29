@@ -1,0 +1,1 @@
+# This file is deprecated. Its functionality has been migrated to `services/overlay_service.py` and `services/hotkey_service.py`.

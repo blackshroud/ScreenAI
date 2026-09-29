@@ -19,11 +19,18 @@ class Settings(BaseSettings):
     DEV_MODE: bool = False
     
     # AI Configuration - Defaults match .env file values
-    TRACK_CANDIDATE_RESPONSES: bool = True
+    TRACK_USER_RESPONSES: bool = True
     INCLUDE_CONVERSATION_HISTORY: bool = True
     MAX_CONVERSATION_HISTORY: int = 6
     GENERATE_FULL_ANSWERS: bool = True
     PERSONALIZE_ANSWERS: bool = True
+
+    # Learning & Personalization
+    ENABLE_LEARNING: bool = True
+    ENABLE_SUGGESTIONS: bool = True
+    ENABLE_AUTOMATION_DETECTION: bool = True
+    MAX_TASK_HISTORY: int = 200
+    SUGGESTION_COOLDOWN_SECONDS: int = 300
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -63,9 +70,14 @@ def print_config_debug():
     # --- Other Settings ---
     print(f"   📊 LOG_LEVEL = {settings.LOG_LEVEL}")
     print(f"   🤖 AI Settings:")
-    print(f"      TRACK_CANDIDATE_RESPONSES = {settings.TRACK_CANDIDATE_RESPONSES}")
+    print(f"      TRACK_USER_RESPONSES = {settings.TRACK_USER_RESPONSES}")
     print(f"      INCLUDE_CONVERSATION_HISTORY = {settings.INCLUDE_CONVERSATION_HISTORY}")
     print(f"      MAX_CONVERSATION_HISTORY = {settings.MAX_CONVERSATION_HISTORY}")
     print(f"      GENERATE_FULL_ANSWERS = {settings.GENERATE_FULL_ANSWERS}")
     print(f"      PERSONALIZE_ANSWERS = {settings.PERSONALIZE_ANSWERS}")
+    print(f"   🧠 Learning Settings:")
+    print(f"      ENABLE_LEARNING = {settings.ENABLE_LEARNING}")
+    print(f"      ENABLE_SUGGESTIONS = {settings.ENABLE_SUGGESTIONS}")
+    print(f"      ENABLE_AUTOMATION_DETECTION = {settings.ENABLE_AUTOMATION_DETECTION}")
+    print(f"      MAX_TASK_HISTORY = {settings.MAX_TASK_HISTORY}")
     print(f"   🔑 API Keys: DEEPGRAM={'*' * 20 if settings.DEEPGRAM_API_KEY else 'Not Set'}")

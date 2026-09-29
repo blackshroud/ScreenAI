@@ -9,13 +9,15 @@ from .utils import send_json
 from services.llm_service import MultiLLMManager
 from services.stt_service import DeepgramManager
 from services.vision_service import vision_service
+from services.memory_service import memory_service
+from services.suggestion_engine import get_suggestion_engine
 
 # Session TTL: 30 minutes of inactivity with no WebSocket connected
 SESSION_TTL_SECONDS = 30 * 60
 
-class InterviewSession:
+class CopilotSession:
     """
-    Represents a single, stateful interview session.
+    Represents a single, stateful AI assistant session.
     This object persists even if the WebSocket connection is lost.
     """
     def __init__(self, session_id: str):
@@ -32,6 +34,8 @@ class InterviewSession:
         self.transcript_buffer: str = ""
         self.silence_timer: Optional[asyncio.Task] = None
         self.last_activity_time: float = time.time()
+        self.suggestion_engine = get_suggestion_engine()
+        self.context_manager = None
 
     def _touch(self):
         """Update last activity time."""
@@ -52,16 +56,16 @@ class InterviewSession:
         print(f"⬅️ [BACKEND] Sending 'api_key_status' for Deepgram. Valid: {is_valid}")
         await self._send_json("api_key_status", {"service": "deepgram", "valid": is_valid})
 
-    async def handle_start_interview(self, payload: dict):
-        """Handles the 'start_interview' message."""
+    async def handle_start_session(self, payload: dict):
+        """Handles the 'start_session' message."""
         self._touch()
-        print(f"🎬 Session {self.session_id}: Starting interview...")
+        print(f"🎬 Session {self.session_id}: Starting session...")
         try:
             primary_provider_config = payload.get('aiProvider')
             secondary_provider_config = payload.get('aiSecondaryProvider')
             primary_vision_config = payload.get('visionProvider')
             secondary_vision_config = payload.get('visionSecondaryProvider')
-            onboarding_context = payload.get('onboardingData', {})
+            session_settings = payload.get('settings') or {}
             
             self.state["is_muted"] = payload.get('is_muted', False)
             self.state["process_all_speakers"] = payload.get('process_all_speakers', True)
@@ -76,9 +80,9 @@ class InterviewSession:
                 "available_presets": list(self.llm_manager.presets.keys()),
                 "health_status": health_results
             })
-            print(f"✅ Session {self.session_id}: Interview started and managers initialized.")
+            print(f"✅ Session {self.session_id}: Session started and managers initialized.")
         except Exception as e:
-            print(f"❌ CRITICAL: Session {self.session_id}: Failed to start interview: {e}")
+            print(f"❌ CRITICAL: Session {self.session_id}: Failed to start session: {e}")
             await self._send_json("error", {"message": f"Failed to initialize AI providers: {str(e)}"})
 
     async def handle_audio_chunk(self, payload: dict):
@@ -177,9 +181,9 @@ class InterviewSession:
                 "error": f"Vision analysis failed: {str(e)}"
             })
 
-    async def handle_end_interview(self, payload: dict):
-        """Handles the end of an interview."""
-        print(f"🛑 Session {self.session_id}: Ending interview.")
+    async def handle_end_session(self, payload: dict):
+        """Handles the end of a session."""
+        print(f"🛑 Session {self.session_id}: Ending session.")
         await self.cleanup()
         session_manager.remove_session(self.session_id)
 
@@ -207,7 +211,7 @@ class InterviewSession:
         if not config_loaded:
             raise ValueError("Failed to load AI provider configuration.")
         
-        self.llm_manager.initialize_candidate_context(onboarding_context)
+        self.llm_manager.initialize_user_context(onboarding_context)
         vision_service.set_context_manager(self.llm_manager.shared_context)
         await self.llm_manager.perform_health_checks()
 
@@ -277,7 +281,7 @@ class InterviewSession:
             self.transcript_buffer = (self.transcript_buffer + " " + transcript).strip()
         elif is_final and not should_process:
             if self.llm_manager:
-                self.llm_manager.process_candidate_response(transcript)
+                self.llm_manager.process_user_response(transcript)
 
     async def cleanup(self):
         """Cleans up resources for the session."""
@@ -289,24 +293,111 @@ class InterviewSession:
         print(f"Session {self.session_id} cleaned up.")
 
 
+    async def handle_chat(self, payload: dict):
+        """Handle general chat messages."""
+        self._touch()
+        try:
+            question = payload.get('message', '')
+            if not question.strip():
+                await self._send_json("chat_response", {"error": "Empty message"})
+                return
+            context_manager = getattr(self, 'context_manager', None)
+            if context_manager is None:
+                from services.context_manager import PersistentContextManager
+                context_manager = PersistentContextManager()
+                onboarding_data = payload.get('onboardingData', {})
+                if onboarding_data:
+                    context_manager.initialize_persistent_context(onboarding_data)
+                self.context_manager = context_manager
+            if not self.llm_manager:
+                await self._send_json("chat_response", {"error": "LLM not initialized"})
+                return
+            prompt = self.llm_manager.get_prompts().get_chat_prompt(question, context_manager)
+            answer, result_info = await self.llm_manager.get_ai_answer(prompt, None)
+            context_manager.add_ai_response(answer)
+            await self._send_json("chat_response", {"response": answer, "success": result_info.get("success", False), "context_updated": True})
+        except Exception as e:
+            print(f"Error in chat handler: {e}")
+            await self._send_json("chat_response", {"error": str(e), "success": False})
+
+    async def handle_task_completed(self, payload: dict):
+        """Handle task completion."""
+        self._touch()
+        try:
+            task_name = payload.get('task_name', 'Unknown task')
+            category = payload.get('category', 'other')
+            context = payload.get('context', {})
+            outcome = payload.get('outcome', 'success')
+            memory_service.add_task_history(task_name=task_name, description=context.get('description', ''), status=outcome, **context)
+            suggestions = []
+            if hasattr(self, 'suggestion_engine'):
+                suggestions = await self.suggestion_engine.analyze_task_completion(task_name=task_name, category=category, context=context)
+            await self._send_json("task_completed", {"success": True, "task_id": task_name, "suggestions": suggestions, "message": f"Task '{task_name}' recorded"})
+        except Exception as e:
+            await self._send_json("task_completed", {"success": False, "error": str(e)})
+
+    async def handle_get_suggestions(self, payload: dict):
+        """Handle request for real-time suggestions."""
+        self._touch()
+        try:
+            context = payload.get('context', {})
+            suggestions = []
+            if hasattr(self, 'suggestion_engine'):
+                suggestions = await self.suggestion_engine.get_realtime_suggestions(context)
+            await self._send_json("suggestions", {"success": True, "suggestions": suggestions})
+        except Exception as e:
+            await self._send_json("suggestions", {"success": False, "error": str(e)})
+
+    async def handle_learn_preference(self, payload: dict):
+        """Handle explicit user preference learning."""
+        self._touch()
+        try:
+            key = payload.get('key')
+            value = payload.get('value')
+            if key and value is not None:
+                memory_service.update_profile({key: value})
+                await self._send_json("preference_learned", {"success": True, "key": key, "value": value})
+            else:
+                await self._send_json("preference_learned", {"success": False, "error": "Missing key or value"})
+        except Exception as e:
+            await self._send_json("preference_learned", {"success": False, "error": str(e)})
+
+    async def handle_get_memory_summary(self, payload: dict):
+        """Return the current memory summary."""
+        self._touch()
+        await self._send_json("memory_summary", {"success": True, "summary": memory_service.get_memory_summary(), "profile": memory_service.get_profile(), "task_history": memory_service.get_task_history(limit=20)})
+
+    async def handle_get_system_status(self, payload: dict):
+        """Handle system status request."""
+        self._touch()
+        try:
+            status = {}
+            if self.llm_manager:
+                status["llm"] = self.llm_manager.get_system_status()
+            status["memory"] = {"profile_set": bool(memory_service.get_profile().get("name")), "task_count": len(memory_service.get_task_history()), "automations": len(memory_service.get_automations())}
+            await self._send_json("system_status", {"success": True, "status": status})
+        except Exception as e:
+            await self._send_json("system_status", {"success": False, "error": str(e)})
+
+
 class SessionManager:
     """
-    Manages all active interview sessions.
+    Manages all active AI assistant sessions.
     Includes TTL-based cleanup for stale sessions.
     """
     def __init__(self):
-        self.active_sessions: Dict[str, InterviewSession] = {}
+        self.active_sessions: Dict[str, CopilotSession] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
 
-    def create_session(self) -> InterviewSession:
-        """Creates a new, unique interview session."""
+    def create_session(self) -> CopilotSession:
+        """Creates a new, unique AI assistant session."""
         session_id = str(uuid.uuid4())
-        session = InterviewSession(session_id)
+        session = CopilotSession(session_id)
         self.active_sessions[session_id] = session
         print(f"Created new session: {session_id} (total active: {len(self.active_sessions)})")
         return session
 
-    def get_session(self, session_id: str) -> Optional[InterviewSession]:
+    def get_session(self, session_id: str) -> Optional[CopilotSession]:
         """Retrieves an existing session by its ID."""
         session = self.active_sessions.get(session_id)
         if session:

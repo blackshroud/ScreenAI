@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from core.config import settings
 from core.key_utils import resolve_provider_keys
-import window_manager
+from services.overlay_service import overlay_service
 from services.llm_service import verify_provider_connection
 from services.vision_service import verify_vision_provider_connection
 from core.env_utils import env_manager
@@ -13,11 +13,8 @@ import os
 
 router = APIRouter()
 
-class TransparencyRequest(BaseModel):
-    transparency: float  # 0.0 to 1.0
-
-class TransparencyPercentRequest(BaseModel):
-    percent: int  # 0 to 100
+class OpacityRequest(BaseModel):
+    percent: int  # 10 to 100
 
 class ProviderVerifyRequest(BaseModel):
     name: str
@@ -229,62 +226,32 @@ async def verify_vision_ai_provider(request: ProviderVerifyRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to verify vision provider: {e}")
 
-@router.get("/api/transparency")
-async def get_transparency():
-    """Get current window transparency information"""
-    return window_manager.get_transparency_info()
 
-@router.post("/api/transparency")
-async def set_transparency(request: TransparencyRequest):
-    """Set window transparency (0.0 = transparent, 1.0 = opaque)"""
-    success = window_manager.set_app_transparency(request.transparency)
-    if success:
-        return {
-            "success": True,
-            "transparency": request.transparency,
-            "message": f"Transparency set to {request.transparency*100:.0f}%"
-        }
-    else:
-        raise HTTPException(status_code=400, detail="Failed to set transparency")
+@router.get("/api/opacity")
+async def get_opacity():
+    """Current overlay opacity and overlay state."""
+    return overlay_service.get_state()
 
-@router.post("/api/transparency/percent")
-async def set_transparency_percent(request: TransparencyPercentRequest):
-    """Set window transparency as percentage (0 = transparent, 100 = opaque)"""
-    success = window_manager.set_app_transparency_percent(request.percent)
-    if success:
-        return {
-            "success": True,
-            "percent": request.percent,
-            "transparency": request.percent / 100.0,
-            "message": f"Transparency set to {request.percent}%"
-        }
-    else:
-        raise HTTPException(status_code=400, detail="Failed to set transparency")
 
-@router.post("/api/transparency/presets/transparent")
-async def make_transparent():
-    """Make window 60% transparent (40% opacity) - good for interviews"""
-    success = window_manager.make_app_transparent()
-    if success:
-        return {"success": True, "message": "Window set to interview mode (40% opacity)"}
-    else:
-        raise HTTPException(status_code=400, detail="Failed to set transparency")
+@router.post("/api/opacity")
+async def set_opacity(request: OpacityRequest):
+    """Set overlay opacity as a percentage (10-100)."""
+    if not overlay_service.set_opacity(request.percent):
+        raise HTTPException(status_code=400, detail="Failed to set overlay opacity (Windows only)")
+    return {"success": True, "percent": overlay_service.opacity_percent}
 
-@router.post("/api/transparency/presets/semi-transparent")
-async def make_semi_transparent():
-    """Make window semi-transparent (70% opacity)"""
-    success = window_manager.make_app_semi_transparent()
-    if success:
-        return {"success": True, "message": "Window set to semi-transparent (70% opacity)"}
-    else:
-        raise HTTPException(status_code=400, detail="Failed to set transparency")
 
-@router.post("/api/transparency/presets/opaque")
-async def make_opaque():
-    """Make window fully opaque (100% opacity)"""
-    success = window_manager.make_app_opaque()
-    if success:
-        return {"success": True, "message": "Window set to opaque (100% opacity)"}
-    else:
-        raise HTTPException(status_code=400, detail="Failed to set transparency")
+@router.post("/api/opacity/preset/{level}")
+async def set_opacity_preset(level: str):
+    """Apply a named opacity preset: ghost (40%), semi (70%) or opaque (100%)."""
+    if not overlay_service.set_opacity_level(level):
+        raise HTTPException(status_code=400, detail=f"Could not apply opacity preset {level!r}")
+    return {"success": True, "percent": overlay_service.opacity_percent}
 
+
+@router.post("/api/ghost-mode")
+async def toggle_ghost_mode():
+    """Toggle click-through (ghost) mode."""
+    if not overlay_service.toggle_ghost_mode():
+        raise HTTPException(status_code=400, detail="Failed to toggle ghost mode (Windows only)")
+    return {"success": True, "ghost_mode": overlay_service.is_ghost_mode}

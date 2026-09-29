@@ -1,0 +1,251 @@
+/* Live Copilot Interface Styles */
+
+:root {
+    --copilot-bg: rgba(0, 0, 0, 0.7);
+    --copilot-header-bg: rgba(20, 20, 20, 0.9);
+    --copilot-text-color: #e0e0e0;
+    --copilot-border-color: #333;
+    --copilot-input-bg: rgba(30, 30, 30, 0.9);
+    --copilot-input-border: #555;
+    --copilot-button-bg: #007bff;
+    --copilot-button-hover-bg: #0056b3;
+    --copilot-activity-pulse: #00bcd4;
+}
+
+.copilot-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    background-color: var(--copilot-bg);
+    color: var(--copilot-text-color);
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+    border-radius: 8px;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+}
+
+.copilot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background-color: var(--copilot-header-bg);
+    border-bottom: 1px solid var(--copilot-border-color);
+    user-select: none; /* Prevent text selection */
+    -webkit-app-region: drag; /* Make header draggable in webview */
+}
+
+.copilot-status {
+    display: flex;
+    align-items: center;
+    -webkit-app-region: no-drag; /* Exclude drag from status area */
+}
+
+.status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: #ccc; /* Default grey */
+    margin-right: 8px;
+}
+
+.status-indicator.recording {
+    background-color: #ffc107; /* Orange for active */
+    box-shadow: 0 0 5px #ffc107;
+}
+
+.header-controls {
+    display: flex;
+    gap: 10px;
+    -webkit-app-region: no-drag; /* Exclude drag from controls */
+}
+
+.header-controls select,
+.header-controls button {
+    padding: 5px 10px;
+    border: 1px solid var(--copilot-input-border);
+    border-radius: 5px;
+    background-color: var(--copilot-input-bg);
+    color: var(--copilot-text-color);
+    cursor: pointer;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.header-controls button.reset-btn {
+    background-color: #ffc107; /* Warning color */
+    color: #333;
+    border-color: #e0a800;
+}
+
+.header-controls button.reset-btn:hover {
+    background-color: #e0a800;
+}
+
+.header-controls button.end-btn {
+    background-color: #dc3545; /* Danger color */
+    border-color: #c82333;
+}
+
+.header-controls button.end-btn:hover {
+    background-color: #c82333;
+}
+
+.header-controls select:hover,
+.header-controls button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: #777;
+}
+
+.copilot-content {
+    flex-grow: 1;
+    padding: 15px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+}
+
+.conversation-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.initial-message {
+    text-align: center;
+    padding: 20px;
+    color: #bbb;
+}
+
+.initial-message h1 {
+    color: #fff;
+    font-size: 1.8em;
+    margin-bottom: 10px;
+}
+
+.initial-message p {
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
+.user-input-area {
+    display: flex;
+    padding: 10px 15px;
+    border-top: 1px solid var(--copilot-border-color);
+    background-color: var(--copilot-header-bg);
+}
+
+.user-input-area textarea {
+    flex-grow: 1;
+    min-height: 38px; /* Standard button height */
+    max-height: 150px; /* Limit expansion */
+    padding: 10px;
+    border: 1px solid var(--copilot-input-border);
+    border-radius: 5px;
+    background-color: var(--copilot-input-bg);
+    color: var(--copilot-text-color);
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9em;
+    resize: vertical; /* Allow vertical resizing */
+    margin-right: 10px;
+    outline: none;
+}
+
+.user-input-area textarea::placeholder {
+    color: #888;
+}
+
+.user-input-area button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 5px;
+    background-color: var(--copilot-button-bg);
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    white-space: nowrap;
+}
+
+.user-input-area button:hover {
+    background-color: var(--copilot-button-hover-bg);
+}
+
+.activity-indicator {
+    position: absolute;
+    bottom: 60px; /* Above the input area */
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    padding: 8px 15px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.activity-indicator.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.listening-state .pulse {
+    width: 8px;
+    height: 8px;
+    background-color: var(--copilot-activity-pulse);
+    border-radius: 50%;
+    animation: pulse 1.5s infinite ease-out;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(0.8);
+        opacity: 0.7;
+    }
+    50% {
+        transform: scale(1.2);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(0.8);
+        opacity: 0.7;
+    }
+}
+
+/* Adjustments for transparency (ghost mode) */
+body.ghost-mode .copilot-container {
+    background-color: rgba(0, 0, 0, 0.4); /* More transparent background */
+}
+
+body.ghost-mode .copilot-header {
+    background-color: rgba(20, 20, 20, 0.6); /* More transparent header */
+}
+
+body.ghost-mode .user-input-area {
+    background-color: rgba(20, 20, 20, 0.6);
+}
+
+body.ghost-mode .header-controls select,
+body.ghost-mode .header-controls button,
+body.ghost-mode .user-input-area textarea,
+body.ghost-mode .user-input-area button {
+    background-color: rgba(30, 30, 30, 0.6);
+    border-color: rgba(85, 85, 85, 0.6);
+    color: rgba(224, 224, 224, 0.8);
+}
+
+body.ghost-mode .header-controls button.reset-btn {
+    background-color: rgba(255, 193, 7, 0.6);
+    border-color: rgba(224, 168, 0, 0.6);
+    color: rgba(51, 51, 51, 0.8);
+}
+
+body.ghost-mode .header-controls button.end-btn {
+    background-color: rgba(220, 53, 69, 0.6);
+    border-color: rgba(200, 35, 51, 0.6);
+}
