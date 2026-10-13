@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from core.config import settings
+
 
 class MemoryService:
     """Persistent, thread-safe memory for the ScreenAI assistant."""
@@ -91,7 +93,7 @@ class MemoryService:
         }
         history = self._data.get("task_history", [])
         history.append(task)
-        self._data["task_history"] = history[-200:]
+        self._data["task_history"] = history[-max(1, settings.MAX_TASK_HISTORY):]
         self._save()
         return task
     
@@ -99,11 +101,11 @@ class MemoryService:
         history = self._data.get("task_history", [])
         return history[-limit:]
     
-    def add_pattern(self, pattern, category="workflow", frequency=1):
+    def add_pattern(self, pattern, category="workflow", frequency=1, absolute=False):
         patterns = self._data.get("learned_patterns", [])
         for p in patterns:
             if p.get("pattern") == pattern:
-                p["frequency"] = p.get("frequency", 1) + frequency
+                p["frequency"] = frequency if absolute else p.get("frequency", 1) + frequency
                 p["last_seen"] = datetime.now().isoformat()
                 self._save()
                 return p
@@ -191,7 +193,7 @@ class MemoryService:
         new_patterns = 0
         for cat, count in category_counts.items():
             if count >= 3:
-                pattern = self.add_pattern(f"Frequently performs {cat} tasks", category="workflow", frequency=count)
+                pattern = self.add_pattern(f"Frequently performs {cat} tasks", category="workflow", frequency=count, absolute=True)
                 if pattern: new_patterns += 1
         automations_suggested = 0
         frequent_tasks = [t for t in tasks if category_counts.get(t.get("category", "other"), 0) >= 3]

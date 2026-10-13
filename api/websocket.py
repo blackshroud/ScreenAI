@@ -21,7 +21,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: Optional[str] = Q
             print(f"🔗 Resuming session: {session_id}")
             session.websocket = websocket
             await websocket.accept()
-            await send_json(websocket, "session_resumed", {"session_id": session.session_id})
+            await send_json(websocket, "session_resumed", {"session_id": session.session_id, "is_active": session.is_active})
         else:
             print(f"⚠️ Session not found: {session_id}. Creating new session.")
     
@@ -56,7 +56,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: Optional[str] = Q
 
     except WebSocketDisconnect:
         print(f"🔌 WebSocket disconnected from session: {session.session_id}")
-        session.websocket = None
+        await _detach(session, websocket)
     except Exception as e:
         print(f"❌ Unhandled WebSocket error in session {session.session_id}: {e}")
-        session.websocket = None
+        await _detach(session, websocket)
+
+
+async def _detach(session, websocket: WebSocket):
+    """Detach `websocket` from its session unless a newer connection already took over."""
+    if session.websocket is not websocket:
+        return
+    session.websocket = None
+    try:
+        # Nobody is listening any more, so release the Deepgram connection.
+        await session.handle_stop_listening({})
+    except Exception as e:
+        print(f"⚠️ Error stopping listening for session {session.session_id}: {e}")

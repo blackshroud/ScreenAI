@@ -1,16 +1,26 @@
 import { devLog } from './config.js';
-import uiManager from './ui_manager.js';
+
+const MAX_RECONNECT_DELAY_MS = 15000;
 
 export class WebSocketHandler {
     constructor(stateManager) {
         this.stateManager = stateManager;
         this.socket = null;
-        this.providerManager = null; // Direct reference to the ProviderManager
+        this.uiManager = null;
+        this.providerManager = null;
         this.session_id = null;
         this.reconnect_attempts = 0;
-        this.max_reconnect_attempts = 5;
+        this.max_reconnect_attempts = 8;
         this.is_intentionally_closing = false;
-        this.checks = {};
+        this.reconnecting = false;
+
+        // Hooks wired up by main.js.
+        this.onDisconnect = null;       // connection lost: stop audio, etc.
+        this.onSessionCreated = null;   // a brand-new server session exists: start it
+    }
+
+    setUIManager(uiManager) {
+        this.uiManager = uiManager;
     }
 
     setProviderManager(providerManager) {
@@ -30,135 +40,162 @@ export class WebSocketHandler {
                 url += `?session_id=${this.session_id}`;
             }
 
-            // uiManager handles check statuses now
-            // this.updateCheckStatus(this.checks.backend, 'pending', 'Connecting...');
-            this.socket = new WebSocket(url);
-            this.stateManager.setSocket(this.socket);
-
-            // Store the promise's resolver to be called when session is confirmed.
+            const socket = new WebSocket(url);
+            this.socket = socket;
+            this.stateManager.setSocket(socket);
             this.resolveConnectionPromise = resolve;
 
-            // Clear any old listeners before attaching new ones
-            this.socket.onopen = null;
-            this.socket.onclose = null;
-            this.socket.onerror = null;
-            this.socket.onmessage = null;
-            
-            // Use addEventListener for all events for consistency and robustness.
-            this.socket.addEventListener('open', this.onOpen.bind(this));
-            this.socket.addEventListener('close', this.onClose.bind(this));
-            this.socket.addEventListener('error', (err) => {
+            socket.addEventListener('open', this.onOpen.bind(this));
+            socket.addEventListener('close', (event) => this.onClose(event, socket));
+            socket.addEventListener('error', (err) => {
                 this.onError(err);
-                reject(new Error("WebSocket connection failed."));
+                reject(new Error('WebSocket connection failed.'));
             });
-            this.socket.addEventListener('message', this.onMessage.bind(this));
+            socket.addEventListener('message', this.onMessage.bind(this));
         });
     }
 
-    onOpen(event) {
-        console.log("[open] Connection established");
-        // This is now handled by the uiManager
+    onOpen() {
+        devLog('[open] Connection established');
         this.reconnect_attempts = 0;
     }
 
-    onClose(event) {
-        console.log(`[close] Connection closed. Intentional: ${this.is_intentionally_closing}`);
-        // This is now handled by the uiManager
-        if (!this.is_intentionally_closing) {
-            this.handleReconnect();
-        }
+    onClose(event, socket) {
+        // Ignore close events from a socket that has already been replaced.
+        if (socket !== this.socket) return;
+        devLog(`[close] Connection closed. Intentional: ${this.is_intentionally_closing}`);
+        if (this.is_intentionally_closing) return;
+        if (this.onDisconnect) this.onDisconnect();
+        this.handleReconnect();
     }
 
     onError(error) {
-        console.error(`[error] WebSocket error:`, error);
-        // This is now handled by the uiManager
+        console.error('[error] WebSocket error:', error);
     }
-    
-    onMessage(event) {
-        const data = JSON.parse(event.data);
-        devLog("Received from backend:", data);
 
-        if (data.type === 'session_created') {
-            this.session_id = data.payload.session_id;
-            console.log(`🚀 New session started: ${this.session_id}`);
-            // Resolve the connection promise now that session is confirmed.
-            if (this.resolveConnectionPromise) {
-                this.resolveConnectionPromise(this.session_id);
-                this.resolveConnectionPromise = null; // Clear the resolver
+    handleReconnect() {
+        if (this.reconnecting) return;
+        if (this.reconnect_attempts >= this.max_reconnect_attempts) {
+            this.uiManager?.setStatus('Disconnected - restart the app', 'error');
+            return;
+        }
+        this.reconnecting = true;
+        this.reconnect_attempts += 1;
+        const delay = Math.min(1000 * 2 ** (this.reconnect_attempts - 1), MAX_RECONNECT_DELAY_MS);
+        this.uiManager?.setStatus(`Connection lost - reconnecting (${this.reconnect_attempts})...`, 'error');
+        setTimeout(async () => {
+            try {
+                await this.connect();
+                this.reconnecting = false;
+            } catch (err) {
+                this.reconnecting = false;
+                this.handleReconnect();
             }
-        } else if (data.type === 'session_resumed') {
-            this.session_id = data.payload.session_id;
-            console.log(`🔗 Session resumed: ${this.session_id}`);
+        }, delay);
+    }
+
+    onMessage(event) {
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (err) {
+            console.warn('Ignoring malformed message from backend', err);
+            return;
+        }
+        devLog('Received from backend:', data);
+
+        const resolveConnection = () => {
             if (this.resolveConnectionPromise) {
                 this.resolveConnectionPromise(this.session_id);
                 this.resolveConnectionPromise = null;
             }
-        } else if (data.type === 'transcript_update') {
-            this.handleTranscriptUpdate(data.payload);
-        } else if (data.type === 'ai_response') {
-            this.handleAiResponse(data.payload);
-        } else if (data.type === 'api_key_status') {
-            // Handled by uiManager
-            devLog(`[WebSocket] API Key Status for ${data.payload.service}: ${data.payload.valid}`);
-        } else {
-            // Handle other messages by routing them to the UI Manager
-            uiManager.handleMessage(data.type, data.payload);
+        };
+
+        switch (data.type) {
+            case 'session_created':
+                // Also fires when the server forgot our old session (e.g. it restarted).
+                this.session_id = data.payload.session_id;
+                resolveConnection();
+                if (this.onSessionCreated) this.onSessionCreated();
+                break;
+            case 'session_resumed':
+                this.session_id = data.payload.session_id;
+                resolveConnection();
+                if (this.uiManager?.sessionReady) this.uiManager.setStatus('Reconnected', 'connected');
+                break;
+            case 'transcript_update':
+                this.handleTranscriptUpdate(data.payload);
+                break;
+            default:
+                this.uiManager?.handleMessage(data.type, data.payload);
         }
     }
 
-    // Method to send messages to the backend
     sendMessage(type, payload) {
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            this._touch();
-            const message = { type, payload };
-            this.socket.send(JSON.stringify(message));
-        } else {
-            console.warn("WebSocket not open. Message not sent:", type, payload);
+            this.socket.send(JSON.stringify({ type, payload }));
+            return true;
         }
+        console.warn('WebSocket not open. Message not sent:', type);
+        return false;
     }
 
-    // Handle incoming transcript updates
+    sendAudioChunk(chunk, isMuted) {
+        this.sendMessage('audio_chunk', {
+            audio_b64: this.bytesToBase64(chunk),
+            is_muted: isMuted
+        });
+    }
+
+    /**
+     * Base64-encode a PCM buffer for transport. Raw bytes as a JSON array cost
+     * roughly 4 bytes of text per byte of audio; base64 costs 1.33. Encoded in
+     * slices because String.fromCharCode.apply exceeds the argument limit on
+     * large buffers.
+     */
+    bytesToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        const SLICE = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += SLICE) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + SLICE));
+        }
+        return btoa(binary);
+    }
+
     handleTranscriptUpdate(payload) {
-        // With diarization disabled, all speech comes from speaker 0 and should be labeled as User
-        // With diarization enabled, speaker 0 = user, speaker 1+ = other(s)
-        const speakerId = payload.speaker !== undefined ? payload.speaker : 0;
-        const isFinal = payload.is_final;
-        const transcript = payload.transcript;
-
-        if (speakerId === 0) { // User
-            if (isFinal) {
-                uiManager.finalizeUserMessage(transcript);
-            } else {
-                uiManager.updateUserMessage(transcript);
-            }
-        } else { // Other speakers
-            if (isFinal) {
-                uiManager.finalizeOtherMessage(transcript);
-            } else {
-                uiManager.updateOtherMessage(transcript);
-            }
+        if (!this.uiManager) return;
+        // Diarization is off, so every utterance arrives as speaker 0 (the user).
+        if (payload.is_final) {
+            this.uiManager.finalizeUserMessage(payload.transcript);
+        } else {
+            this.uiManager.updateUserMessage(payload.transcript);
         }
     }
 
-    // Handle incoming AI responses
-    handleAiResponse(payload) {
-        if (payload.response_type === 'streaming') {
-            uiManager.streamAIResponse(payload.response);
-        } else if (payload.response_type === 'final') {
-            uiManager.finalizeAIResponse(payload.response);
-        } else if (payload.response_type === 'quick') {
-            uiManager.displayQuickAIResponse(payload.response);
+    // Used by screenshot-service while a vision request is in flight.
+    showVisionProcessingStatus(count) {
+        this.uiManager?.showActivity(`Analyzing ${count} screenshot${count === 1 ? '' : 's'}...`);
+    }
+
+    hideVisionProcessingStatus() {
+        this.uiManager?.hideActivity();
+    }
+
+    close() {
+        this.is_intentionally_closing = true;
+        if (this.socket) this.socket.close();
+    }
+
+    /** Drop the current session and open a fresh one on a new socket. */
+    async restart() {
+        this.session_id = null;
+        const old = this.socket;
+        this.is_intentionally_closing = true;
+        try {
+            await this.connect();
+        } finally {
+            if (old && old !== this.socket) old.close();
         }
-    }
-
-    // Helper to update last activity time
-    _touch() {
-        // No longer tracking activity on the frontend
-    }
-
-    // In the new architecture, checks are managed by the uiManager
-    updateCheckStatus(checkElement, status, text) {
-        // This function is no longer directly used in websocket-handler, as uiManager handles checks
-        devLog(`[WebSocketHandler] Check status update called, but handled by uiManager: ${checkElement?.id} ${status}: ${text}`);
     }
 }

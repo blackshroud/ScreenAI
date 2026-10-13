@@ -1,5 +1,5 @@
-// Hotkeys Module for Aura
-// Provides keyboard shortcuts for transparency and other controls
+// Page-level hotkeys for ScreenCopilot (Alt+[ / Alt+] adjust overlay opacity).
+// System-wide hotkeys live in services/hotkey_service.py.
 
 import { devLog } from './config.js';
 import muteManager from './mute-manager.js';
@@ -7,7 +7,7 @@ import muteManager from './mute-manager.js';
 class HotkeyManager {
     constructor() {
         this.transparencyLevels = [0.2, 0.4, 0.6, 0.8, 1.0]; // 5 levels: 20%, 40%, 60%, 80%, 100%
-        this.currentTransparencyLevel = 3; // Default to 80% (index 3)
+        this.currentTransparencyLevel = 4; // The overlay starts fully opaque (100%)
         this.isEnabled = true;
         this.isAlwaysOnTop = true; // Track always-on-top state
         
@@ -66,33 +66,21 @@ class HotkeyManager {
     }
 
     async applyTransparency() {
-        const transparency = this.transparencyLevels[this.currentTransparencyLevel];
-        const percent = Math.round(transparency * 100);
-        
+        const percent = Math.round(this.transparencyLevels[this.currentTransparencyLevel] * 100);
         try {
-            // Only allow transparency changes during live interview
-            const currentView = document.querySelector('.view.active');
-            const isLiveView = currentView && currentView.id === 'live-view';
-            
-            if (!isLiveView) {
-                console.log('ℹ️ Transparency hotkeys only work during live interview');
-                this.showTransparencyFeedback(100, 'Transparency only available in live interview');
-                return;
-            }
-            
-            // Apply Windows-level transparency
-            const response = await fetch('/api/transparency', {
+            const response = await fetch('/api/opacity', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ transparency: transparency })
+                body: JSON.stringify({ percent })
             });
-            
             if (response.ok) {
-                devLog(`🪟 Transparency set to ${percent}% via hotkey`);
+                devLog(`🪟 Opacity set to ${percent}% via hotkey`);
                 this.showTransparencyFeedback(percent);
+            } else {
+                this.showTransparencyFeedback(100, 'Opacity control needs the Windows overlay');
             }
         } catch (error) {
-            console.error('❌ Error setting transparency via hotkey:', error);
+            console.error('❌ Error setting opacity via hotkey:', error);
         }
     }
 

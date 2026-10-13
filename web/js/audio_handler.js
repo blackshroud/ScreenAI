@@ -55,13 +55,23 @@ export async function setupMicrophone() {
 export async function startAudioProcessing(micId, onAudioData) {
     try {
         // 1. Get Audio Streams
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: micId } } });
-        systemStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-
-        if (!micStream || !systemStream) {
-            console.error("Could not get both audio streams.");
+        // micId may be null/'' to use the system default input.
+        micStream = await navigator.mediaDevices.getUserMedia({
+            audio: micId ? { deviceId: { exact: micId } } : true
+        });
+        if (!micStream) {
+            console.error("Could not get the microphone stream.");
             stopAudioProcessing();
             return false;
+        }
+
+        // Screen/system audio is optional: without it the microphone still works,
+        // but screenshots will ask for screen-capture permission on demand.
+        try {
+            systemStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        } catch (displayErr) {
+            console.warn("Screen capture not granted - continuing with microphone only:", displayErr);
+            systemStream = null;
         }
 
         // 2. Setup AudioContext and Worklet
@@ -119,7 +129,6 @@ export async function startAudioProcessing(micId, onAudioData) {
 
         // 4. Connect both sources to the mixed processor with mute control
         const micSource = audioContext.createMediaStreamSource(micStream);
-        const systemSource = audioContext.createMediaStreamSource(systemStream);
         
         // Create gain node for microphone muting
         micGainNode = audioContext.createGain();
@@ -132,11 +141,13 @@ export async function startAudioProcessing(micId, onAudioData) {
         micSource.connect(micGainNode);
         micGainNode.connect(mixedProcessor);
         
-        // System audio connects directly (we don't want to mute interviewer)
-        systemSource.connect(mixedProcessor);
+        // System audio connects directly (only the microphone is mutable)
+        if (systemStream && systemStream.getAudioTracks().length > 0) {
+            audioContext.createMediaStreamSource(systemStream).connect(mixedProcessor);
+        }
 
-        // Store the video track for screenshot reuse, but remove it from the stream
-        const videoTracks = systemStream.getVideoTracks();
+        // Store the video track for screenshot reuse
+        const videoTracks = systemStream ? systemStream.getVideoTracks() : [];
         if (videoTracks.length > 0) {
             screenVideoTrack = videoTracks[0];
             console.log("📹 Screen video track stored for screenshot reuse");

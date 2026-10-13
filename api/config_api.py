@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from core.config import settings
 from core.key_utils import resolve_provider_keys
+from core.personas import PERSONAS
 from services.overlay_service import overlay_service
 from services.llm_service import verify_provider_connection
 from services.vision_service import verify_vision_provider_connection
@@ -255,3 +256,12 @@ async def toggle_ghost_mode():
     if not overlay_service.toggle_ghost_mode():
         raise HTTPException(status_code=400, detail="Failed to toggle ghost mode (Windows only)")
     return {"success": True, "ghost_mode": overlay_service.is_ghost_mode}
+
+
+@router.get("/api/personas")
+async def get_personas():
+    """List the available AI personas for the UI selector."""
+    return [
+        {"id": persona_id, "name": persona["name"], "description": persona["description"]}
+        for persona_id, persona in PERSONAS.items()
+    ]

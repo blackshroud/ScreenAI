@@ -57,6 +57,96 @@
     box-shadow: 0 0 5px #ffc107;
 }
 
+.status-indicator.connected {
+    background-color: #28a745;
+    box-shadow: 0 0 5px #28a745;
+}
+
+.status-indicator.error {
+    background-color: #dc3545;
+    box-shadow: 0 0 5px #dc3545;
+}
+
+.header-controls .listen-btn.active {
+    background-color: #28a745;
+    border-color: #1e7e34;
+}
+
+.header-controls .mute-btn.muted {
+    opacity: 0.7;
+}
+
+/* --- Conversation bubbles --- */
+.chat-message {
+    max-width: 92%;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.06);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.chat-message.user-message {
+    align-self: flex-end;
+    background-color: rgba(0, 123, 255, 0.25);
+}
+
+.chat-message.ai-message {
+    align-self: flex-start;
+}
+
+.chat-message.interim .message-content {
+    opacity: 0.6;
+    font-style: italic;
+}
+
+.message-sender {
+    font-size: 0.7em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.6;
+    margin-bottom: 4px;
+}
+
+.message-content {
+    white-space: pre-wrap;
+}
+
+.message-content:has(.markdown-paragraph, .markdown-header, .code-block-container, .markdown-list) {
+    white-space: normal;
+}
+
+/* --- Toast notifications --- */
+.notification-area {
+    position: fixed;
+    top: 56px;
+    right: 12px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 320px;
+    pointer-events: none;
+}
+
+.notification {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background-color: rgba(20, 20, 20, 0.95);
+    color: #e0e0e0;
+    border-left: 4px solid #17a2b8;
+    font-size: 0.85em;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.notification.error {
+    border-left-color: #dc3545;
+}
+
+.notification.success {
+    border-left-color: #28a745;
+}
+
 .header-controls {
     display: flex;
     gap: 10px;

@@ -209,12 +209,21 @@ class DeepgramManager:
         )
         
         try:
-            await self.dg_connection.start(options)
+            # The SDK reports failures (bad key, TLS, network) by returning False
+            # rather than raising, so the result must be checked.
+            started = await self.dg_connection.start(options)
+            if started is False:
+                self.is_connected = False
+                print("❌ ERROR: Deepgram connection failed to start (check DEEPGRAM_API_KEY and your network)")
+                return False
             self.is_connected = True
             self._reconnect_attempts = 0  # Reset on successful connect
             print("✅ Deepgram connection started successfully")
+            return True
         except Exception as e:
+            self.is_connected = False
             print(f"❌ ERROR: Could not start Deepgram connection: {e}")
+            return False
 
     async def _reconnect(self):
         """Attempt to reconnect to Deepgram with exponential backoff."""
@@ -233,8 +242,10 @@ class DeepgramManager:
             return
 
         try:
-            await self.start()
-            print(f"✅ Deepgram reconnected after {self._reconnect_attempts} attempt(s)")
+            if await self.start():
+                print(f"✅ Deepgram reconnected after {self._reconnect_attempts} attempt(s)")
+            else:
+                asyncio.create_task(self._reconnect())
         except Exception as e:
             print(f"❌ Deepgram reconnect failed: {e}")
             asyncio.create_task(self._reconnect())

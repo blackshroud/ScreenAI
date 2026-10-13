@@ -42,10 +42,10 @@ FORMATTING:
 
 
 
-    if memory_summary and memory_summary != '(No learned context yet)':
+    if settings.PERSONALIZE_ANSWERS and memory_summary and memory_summary != '(No learned context yet)':
         prompt_parts.append(f"\n=== LEARNED CONTEXT ===\n{memory_summary}")
 
-    if conversation_history:
+    if conversation_history and settings.INCLUDE_CONVERSATION_HISTORY:
         recent = conversation_history[-3:]
         history_text = []
         for ex in recent:
@@ -152,3 +152,27 @@ Respond in this format:
 
     return "\n".join(prompt_parts)
 
+
+
+def get_vision_prompt(context_manager: Optional[PersistentContextManager]) -> str:
+    """Prompt for analysing screenshots the user has shared."""
+    persona_id = "general_chat"
+    custom_instructions = ""
+    if context_manager is not None:
+        persistent = context_manager.get_complete_context()['persistent']
+        persona_id = persistent.get('persona_id') or persona_id
+        custom_instructions = (persistent.get('custom_instructions') or '').strip()
+
+    parts = [get_persona_prompt(persona_id)]
+    if custom_instructions:
+        parts.append(f"\nUSER'S CUSTOM INSTRUCTIONS:\n{custom_instructions}")
+    parts.append(
+        "\nThe user has shared one or more screenshots of their screen.\n"
+        "- Work out what they are looking at and what they most likely need help with.\n"
+        "- If it is code or an error, explain the problem and give a fix.\n"
+        "- If it is a question, form or document, answer or summarise it directly.\n"
+        "- Read all visible text accurately, and say so if something is unreadable.\n"
+        "- Be concise. Use markdown, with fenced code blocks for code.\n\n"
+        "**ANSWER:**"
+    )
+    return "\n".join(parts)

@@ -6,6 +6,9 @@ from typing import Dict, Optional
 from fastapi import WebSocket
 
 from .utils import send_json
+from core.config import settings
+from core.personas import PERSONAS
+from core.prompts import get_vision_prompt
 from services.llm_service import MultiLLMManager
 from services.stt_service import DeepgramManager
 from services.vision_service import vision_service
@@ -35,7 +38,10 @@ class CopilotSession:
         self.silence_timer: Optional[asyncio.Task] = None
         self.last_activity_time: float = time.time()
         self.suggestion_engine = get_suggestion_engine()
-        self.context_manager = None
+        self.health_results: Dict[str, bool] = {}
+        self.user_languages: list = []
+        # Serialises answers so a typed question and a spoken one never interleave.
+        self._answer_lock = asyncio.Lock()
 
     def _touch(self):
         """Update last activity time."""
@@ -57,7 +63,7 @@ class CopilotSession:
         await self._send_json("api_key_status", {"service": "deepgram", "valid": is_valid})
 
     async def handle_start_session(self, payload: dict):
-        """Handles the 'start_session' message."""
+        """Handles the 'start_session' message: builds the LLM, vision and STT managers."""
         self._touch()
         print(f"🎬 Session {self.session_id}: Starting session...")
         try:
@@ -66,19 +72,33 @@ class CopilotSession:
             primary_vision_config = payload.get('visionProvider')
             secondary_vision_config = payload.get('visionSecondaryProvider')
             session_settings = payload.get('settings') or {}
-            
+
+            if not primary_provider_config:
+                raise ValueError("No AI provider selected")
+
             self.state["is_muted"] = payload.get('is_muted', False)
             self.state["process_all_speakers"] = payload.get('process_all_speakers', True)
             self.state["is_universally_muted"] = payload.get('is_universally_muted', False)
 
-            await self.initialize_managers(primary_provider_config, secondary_provider_config, primary_vision_config, secondary_vision_config, onboarding_context)
-            
-            current_preset = self.llm_manager.get_current_preset_info()
-            health_results = await self.llm_manager.perform_health_checks()
+            if self.is_active:
+                # Restarting an already running session: release the old STT connection first.
+                await self.cleanup()
+
+            onboarding_context = {
+                "name": session_settings.get('name', ''),
+                "persona_id": session_settings.get('persona_id') or 'general_chat',
+                "custom_instructions": session_settings.get('custom_instructions', ''),
+                "selectedLanguages": session_settings.get('selectedLanguages', []),
+            }
+
+            await self.initialize_managers(primary_provider_config, secondary_provider_config,
+                                           primary_vision_config, secondary_vision_config,
+                                           onboarding_context)
+
             await self._send_json("preset_initialized", {
-                "current_preset": current_preset,
+                "current_preset": self.llm_manager.get_current_preset_info(),
                 "available_presets": list(self.llm_manager.presets.keys()),
-                "health_status": health_results
+                "health_status": self.health_results
             })
             print(f"✅ Session {self.session_id}: Session started and managers initialized.")
         except Exception as e:
@@ -102,6 +122,40 @@ class CopilotSession:
             self.state["is_muted"] = payload.get('is_muted', False)
             if audio_data:
                 await self.stt_manager.send_audio(audio_data)
+
+    async def handle_start_listening(self, payload: dict):
+        """Opens the speech-to-text connection so audio chunks are transcribed."""
+        self._touch()
+        if self.stt_manager:
+            if self.stt_manager.is_connected:
+                await self._send_json("listening_state", {"listening": True})
+                return
+            # Deepgram dropped the connection (idle timeout, network): start a fresh one.
+            try:
+                await self.stt_manager.finish()
+            except Exception as e:
+                print(f"⚠️ Error closing stale Deepgram connection: {e}")
+            self.stt_manager = None
+        manager = DeepgramManager(self.on_transcript, self.user_languages)
+        if not await manager.start():
+            await manager.finish()
+            await self._send_json("listening_state", {
+                "listening": False,
+                "error": "Could not connect to Deepgram. Check DEEPGRAM_API_KEY in .env."
+            })
+            return
+        self.stt_manager = manager
+        await self._send_json("listening_state", {"listening": True})
+
+    async def handle_stop_listening(self, payload: dict):
+        """Closes the speech-to-text connection."""
+        self._touch()
+        if self.stt_manager:
+            await self.stt_manager.finish()
+            self.stt_manager = None
+        if self.silence_timer and not self.silence_timer.done():
+            self.silence_timer.cancel()
+        await self._send_json("listening_state", {"listening": False})
 
     async def handle_config_update(self, payload: dict):
         """Handles configuration updates from the client."""
@@ -155,15 +209,25 @@ class CopilotSession:
             
             print(f"🧠 Analyzing {len(screenshots)} screenshots with {provider_name}-{model_name}")
             
-            analysis, result_info = await vision_service.analyze_coding_problem(
-                provider_name=provider_name,
-                model_name=model_name,
-                screenshots=screenshots,
-                languages=languages
+            vision_manager = vision_service.get_vision_manager(provider_name, model_name)
+            if not vision_manager:
+                await self._send_json("vision_analysis_result", {
+                    "success": False,
+                    "error": f"Vision model {provider_name} - {model_name} is not available"
+                })
+                return
+
+            shared_context = self.llm_manager.shared_context if self.llm_manager else None
+            if shared_context is not None:
+                # Record the request first so the analysis is stored as its answer
+                # instead of overwriting the previous exchange.
+                shared_context.add_conversation_exchange(f"[Analyze {len(screenshots)} screenshot(s)]")
+            analysis, result_info = await vision_manager.analyze_screenshots(
+                get_vision_prompt(shared_context), screenshots, languages
             )
             
             await self._send_json("vision_analysis_result", {
-                "success": result_info.get("success", True),
+                "success": result_info.get("success", False),
                 "analysis": analysis,
                 "provider": provider_name,
                 "model": model_name,
@@ -190,7 +254,7 @@ class CopilotSession:
     async def handle_reset_session(self, payload: dict):
         """Handles the reset of a session's context."""
         self._touch()
-        print(f"🔄 Session {self.session_id}: Resetting interview context...")
+        print(f"🔄 Session {self.session_id}: Resetting conversation context...")
         self.transcript_buffer = ""
         if self.silence_timer:
             self.silence_timer.cancel()
@@ -213,18 +277,33 @@ class CopilotSession:
         
         self.llm_manager.initialize_user_context(onboarding_context)
         vision_service.set_context_manager(self.llm_manager.shared_context)
-        await self.llm_manager.perform_health_checks()
+        self.health_results = await self.llm_manager.perform_health_checks()
 
         vision_service.load_vision_providers(
             primary_config=primary_vision_config,
             secondary_config=secondary_vision_config
         )
 
-        user_languages = onboarding_context.get('selectedLanguages', [])
-        self.stt_manager = DeepgramManager(self.on_transcript, user_languages)
-        await self.stt_manager.start()
-        
+        # Speech-to-text is started on demand (handle_start_listening) so typed-only
+        # use never opens a Deepgram connection.
+        self.user_languages = onboarding_context.get('selectedLanguages', [])
         self.is_active = True
+
+    async def _answer_question(self, question: str):
+        """Streams an answer for `question` to the client (shared by voice and typed input)."""
+        async with self._answer_lock:
+            try:
+                await self._send_json("ai_processing_started", {"question": question})
+
+                async def stream_callback(chunk: str, chunk_type: str):
+                    return await self._send_json("ai_answer_chunk", {"chunk": chunk, "chunk_type": chunk_type})
+
+                # get_ai_answer builds the persona/memory prompt itself, so pass the raw question.
+                answer, result_info = await self.llm_manager.get_ai_answer(question, stream_callback)
+                await self._send_json("ai_answer_complete", {"answer": answer, **result_info})
+            except Exception as e:
+                print(f"❌ CRITICAL: Error answering in session {self.session_id}: {e}")
+                await self._send_json("error", {"message": "Error processing your request."})
 
     async def _process_aggregated_transcript(self):
         """Processes the buffered transcript after a period of silence."""
@@ -233,25 +312,12 @@ class CopilotSession:
 
         transcript = self.transcript_buffer
         self.transcript_buffer = ""
-        
+
         print(f"✅ Silence detected. Processing transcript for session {self.session_id}: {transcript}")
         if not self.llm_manager or not self.websocket:
             return
 
-        try:
-            await self._send_json("ai_processing_started", {"question": transcript})
-
-            async def stream_callback(chunk: str, chunk_type: str):
-                return await self._send_json("ai_answer_chunk", {"chunk": chunk, "chunk_type": chunk_type})
-
-            answer, result_info = await self.llm_manager.get_ai_answer(transcript, stream_callback)
-            
-            await self._send_json("ai_answer_complete", {"answer": answer, **result_info})
-            print(f"🤖 AI STREAMING COMPLETE for session {self.session_id}")
-
-        except Exception as e:
-            print(f"❌ CRITICAL: Error processing transcript for session {self.session_id}: {e}")
-            await self._send_json("error", {"message": "Error processing transcript."})
+        await self._answer_question(transcript)
 
     async def on_transcript(self, data):
         """Callback from Deepgram. Handles transcript logic and silence detection."""
@@ -287,6 +353,7 @@ class CopilotSession:
         """Cleans up resources for the session."""
         if self.stt_manager:
             await self.stt_manager.finish()
+            self.stt_manager = None
         if self.silence_timer and not self.silence_timer.done():
             self.silence_timer.cancel()
         self.is_active = False
@@ -294,44 +361,59 @@ class CopilotSession:
 
 
     async def handle_chat(self, payload: dict):
-        """Handle general chat messages."""
+        """Handles a typed question and streams the answer back like a spoken one."""
         self._touch()
-        try:
-            question = payload.get('message', '')
-            if not question.strip():
-                await self._send_json("chat_response", {"error": "Empty message"})
-                return
-            context_manager = getattr(self, 'context_manager', None)
-            if context_manager is None:
-                from services.context_manager import PersistentContextManager
-                context_manager = PersistentContextManager()
-                onboarding_data = payload.get('onboardingData', {})
-                if onboarding_data:
-                    context_manager.initialize_persistent_context(onboarding_data)
-                self.context_manager = context_manager
-            if not self.llm_manager:
-                await self._send_json("chat_response", {"error": "LLM not initialized"})
-                return
-            prompt = self.llm_manager.get_prompts().get_chat_prompt(question, context_manager)
-            answer, result_info = await self.llm_manager.get_ai_answer(prompt, None)
-            context_manager.add_ai_response(answer)
-            await self._send_json("chat_response", {"response": answer, "success": result_info.get("success", False), "context_updated": True})
-        except Exception as e:
-            print(f"Error in chat handler: {e}")
-            await self._send_json("chat_response", {"error": str(e), "success": False})
+        question = (payload.get('message') or payload.get('question') or '').strip()
+        if not question:
+            await self._send_json("error", {"message": "Empty message", "type": "chat"})
+            return
+        if not self.llm_manager:
+            await self._send_json("error", {
+                "message": "The AI provider is not ready yet. Check ai_providers.json and try again.",
+                "type": "chat"
+            })
+            return
+        persona_id = payload.get('persona_id')
+        if persona_id in PERSONAS:
+            self.llm_manager.shared_context.set_persona(persona_id)
+        await self._answer_question(question)
+
+    async def handle_set_persona(self, payload: dict):
+        """Switches the active persona for this session."""
+        self._touch()
+        persona_id = payload.get('persona_id')
+        if persona_id not in PERSONAS:
+            await self._send_json("error", {"message": f"Unknown persona '{persona_id}'", "type": "set_persona"})
+            return
+        if self.llm_manager:
+            self.llm_manager.shared_context.set_persona(persona_id)
+        await self._send_json("persona_updated", {"persona_id": persona_id})
+
+    async def handle_set_custom_instructions(self, payload: dict):
+        """Sets free-text instructions appended to the persona prompt."""
+        self._touch()
+        if not self.llm_manager:
+            await self._send_json("error", {"message": "AI providers not initialized", "type": "set_custom_instructions"})
+            return
+        self.llm_manager.shared_context.set_custom_instructions(payload.get('custom_instructions', ''))
+        await self._send_json("custom_instructions_updated", {"success": True})
 
     async def handle_task_completed(self, payload: dict):
-        """Handle task completion."""
+        """Records a finished task in memory and returns follow-up suggestions."""
         self._touch()
         try:
-            task_name = payload.get('task_name', 'Unknown task')
+            task_name = payload.get('task_name') or 'Unknown task'
             category = payload.get('category', 'other')
-            context = payload.get('context', {})
+            context = payload.get('context') or {}
             outcome = payload.get('outcome', 'success')
-            memory_service.add_task_history(task_name=task_name, description=context.get('description', ''), status=outcome, **context)
+            if settings.ENABLE_LEARNING:
+                memory_service.record_task(task_name, category=category, context=context, outcome=outcome)
+                if settings.ENABLE_AUTOMATION_DETECTION:
+                    memory_service.consolidate()
             suggestions = []
-            if hasattr(self, 'suggestion_engine'):
-                suggestions = await self.suggestion_engine.analyze_task_completion(task_name=task_name, category=category, context=context)
+            if settings.ENABLE_SUGGESTIONS:
+                suggestions = await self.suggestion_engine.analyze_task_completion(
+                    task_name=task_name, category=category, context=context)
             await self._send_json("task_completed", {"success": True, "task_id": task_name, "suggestions": suggestions, "message": f"Task '{task_name}' recorded"})
         except Exception as e:
             await self._send_json("task_completed", {"success": False, "error": str(e)})
@@ -340,10 +422,9 @@ class CopilotSession:
         """Handle request for real-time suggestions."""
         self._touch()
         try:
-            context = payload.get('context', {})
             suggestions = []
-            if hasattr(self, 'suggestion_engine'):
-                suggestions = await self.suggestion_engine.get_realtime_suggestions(context)
+            if settings.ENABLE_SUGGESTIONS:
+                suggestions = await self.suggestion_engine.get_realtime_suggestions(payload.get('context') or {})
             await self._send_json("suggestions", {"success": True, "suggestions": suggestions})
         except Exception as e:
             await self._send_json("suggestions", {"success": False, "error": str(e)})
@@ -374,7 +455,7 @@ class CopilotSession:
             status = {}
             if self.llm_manager:
                 status["llm"] = self.llm_manager.get_system_status()
-            status["memory"] = {"profile_set": bool(memory_service.get_profile().get("name")), "task_count": len(memory_service.get_task_history()), "automations": len(memory_service.get_automations())}
+            status["memory"] = {"profile_set": bool(memory_service.get_profile().get("name")), "task_count": len(memory_service.get_task_history()), "automations": len(memory_service.get_automation_catalog())}
             await self._send_json("system_status", {"success": True, "status": status})
         except Exception as e:
             await self._send_json("system_status", {"success": False, "error": str(e)})

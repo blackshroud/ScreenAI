@@ -16,3 +16,9 @@ build/
 *.spec
 # AI Provider configuration file with secret keys
 ai_providers.json
+# --- Runtime data ---
+screenai_memory.json
+screenai_memory.tmp
+
+# --- macOS ---
+.DS_Store

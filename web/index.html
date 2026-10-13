@@ -28,18 +28,22 @@
             <div class="copilot-header">
                 <div class="copilot-status">
                     <div class="status-indicator recording"></div>
-                    <span>ScreenCopilot Session</span>
+                    <span id="status-text">ScreenCopilot</span>
                 </div>
                 <div class="header-controls">
                     <select id="persona-select" aria-label="Select AI Persona">
                         <!-- Options will be dynamically loaded by JavaScript -->
                     </select>
+                    <button id="listen-btn" class="listen-btn" title="Start voice input">
+                        <span class="listen-icon">🎙️</span>
+                        <span class="listen-text">Listen</span>
+                    </button>
                     <button id="mute-btn" class="mute-btn" title="Mute microphone input (Alt+M)">
                         <span class="mute-icon">🎤</span>
                         <span class="mute-text">Mute</span>
                     </button>
                     <button id="reset-session-btn" class="reset-btn" title="Reset session context (Alt+O)">Reset</button>
-                    <button id="end-session-btn" class="end-btn" title="End session">End Session</button>
+                    <button id="end-session-btn" class="end-btn" title="End this session and start a new one">New Session</button>
                 </div>
             </div>
 
@@ -70,6 +74,8 @@
             </div>
         </div>
     </div>
+
+    <div id="notification-area" class="notification-area" aria-live="polite"></div>
 
     <script type="module" src="/static/js/main.js"></script>
 

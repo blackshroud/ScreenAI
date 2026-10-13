@@ -1,7 +1,14 @@
-import { devLog, isDev } from './config.js';
-import { LiveStreaming } from './live-streaming.js';
-import muteManager from './mute-manager.js';
+import { devLog } from './config.js';
 import { StreamingMarkdownParser } from './streaming-markdown-parser.js';
+
+const FALLBACK_PERSONAS = [
+    { id: 'general_chat', name: 'General Chat', description: 'Standard AI assistant' },
+    { id: 'developer_copilot', name: 'Developer/Coding Copilot', description: 'Helps with code' },
+    { id: 'research_assistant', name: 'Research Assistant', description: 'Summarizes, extracts data' },
+    { id: 'writer_editor', name: 'Writer/Editor', description: 'Drafts, rephrases, corrects' }
+];
+const SENDER_LABELS = { user: 'You', ai: 'ScreenCopilot', other: 'Other' };
+const NEAR_BOTTOM_PX = 80;
 
 export class UIManager {
     constructor(stateManager, webSocketHandler, providerManager) {
@@ -11,194 +18,280 @@ export class UIManager {
 
         this.conversationStream = null;
         this.activityIndicator = null;
+        this.statusIndicator = null;
+        this.statusText = null;
         this.personaSelect = null;
-        this.userQuestionInput = null;
-        this.sendQuestionBtn = null;
-        this.muteButton = null;
-        this.resetSessionButton = null;
-        this.endSessionButton = null;
 
-        this.currentInterlocutorElement = null; // General element for who is speaking to the AI
-        this.currentAIElement = null; // Track AI message separately
-        this.isStreaming = false;
+        this.currentUserElement = null; // live transcript bubble being updated
+        this.currentAIElement = null;   // AI bubble being streamed into
+        this.aiParser = null;
+        this.listening = false;
+        this.sessionReady = false;
+        this.onListeningState = null; // set by main.js
 
-        this.streaming = new LiveStreaming({
-            enableStreaming: true,
-            streamingSpeed: 15,
-            aiStreamingSpeed: 5
-        });
-        this.markdownParser = new StreamingMarkdownParser();
-        this.thinkingFilterEnabled = true; // Still useful for internal AI thoughts
-
-        this.personas = {}; // To store loaded personas
+        this.personas = {};
         this.selectedPersona = 'general_chat';
     }
 
     init() {
         this.conversationStream = document.getElementById('conversation-stream');
         this.activityIndicator = document.getElementById('activity-indicator');
+        this.statusIndicator = document.querySelector('.copilot-status .status-indicator');
+        this.statusText = document.getElementById('status-text');
         this.personaSelect = document.getElementById('persona-select');
-        this.userQuestionInput = document.getElementById('user-question-input');
-        this.sendQuestionBtn = document.getElementById('send-question-btn');
-        this.muteButton = document.getElementById('mute-btn');
-        this.resetSessionButton = document.getElementById('reset-session-btn');
-        this.endSessionButton = document.getElementById('end-session-btn');
-
-        // Setup basic event listeners that are now managed by main.js's setupUIEventListeners
-        // No direct listeners here, main.js will wire them up.
-        devLog("UIManager initialized.");
+        devLog('UIManager initialized.');
     }
 
+    // --- Personas ---
     async loadPersonas() {
-        // Fetch personas from backend or a local config
-        // For now, hardcode or fetch dynamically later
-        this.personas = {
-            "general_chat": { name: "General Chat", description: "Standard AI assistant" },
-            "developer_copilot": { name: "Developer/Coding Copilot", description: "Helps with code" },
-            "research_assistant": { name: "Research Assistant", description: "Summarizes, extracts data" },
-            "writer_editor": { name: "Writer/Editor", description: "Drafts, rephrases, corrects" }
-        };
+        let list = FALLBACK_PERSONAS;
+        try {
+            const response = await fetch('/api/personas');
+            if (response.ok) list = await response.json();
+        } catch (error) {
+            devLog('Could not load personas from backend, using built-in list.', error);
+        }
+        this.personas = {};
+        list.forEach(p => { this.personas[p.id] = p; });
 
         if (this.personaSelect) {
-            for (const id in this.personas) {
+            this.personaSelect.innerHTML = '';
+            list.forEach(p => {
                 const option = document.createElement('option');
-                option.value = id;
-                option.textContent = this.personas[id].name;
+                option.value = p.id;
+                option.textContent = p.name;
+                option.title = p.description || '';
                 this.personaSelect.appendChild(option);
-            }
-            this.personaSelect.value = this.selectedPersona; // Set default
+            });
+            this.personaSelect.value = this.selectedPersona;
         }
     }
 
     setSelectedPersona(personaId) {
         this.selectedPersona = personaId;
-        devLog(`Selected persona: ${this.selectedPersona}`);
+        devLog(`Selected persona: ${personaId}`);
     }
 
     getSelectedPersona() {
         return this.selectedPersona;
     }
 
-    // --- Conversation Stream Management ---
-    addMessage(sender, text, type = 'text') {
-        const messageElement = document.createElement('div');
-        messageElement.classList.add('chat-message', `${sender}-message`);
-
-        const senderHeader = document.createElement('div');
-        senderHeader.classList.add('message-sender');
-        senderHeader.textContent = sender === 'user' ? 'You' : (sender === 'ai' ? 'ScreenCopilot' : 'Other');
-        messageElement.appendChild(senderHeader);
-
-        const contentElement = document.createElement('div');
-        contentElement.classList.add('message-content');
-        // Initial content can be raw text or simple markdown
-        contentElement.innerHTML = this.markdownParser.parse(text || '');
-        messageElement.appendChild(contentElement);
-
-        this.conversationStream.appendChild(messageElement);
-        this.scrollToBottom();
-        return messageElement; // Return for live updates
+    // --- Status and activity ---
+    setStatus(text, state = 'pending') {
+        if (this.statusText) this.statusText.textContent = text;
+        if (this.statusIndicator) {
+            this.statusIndicator.classList.remove('recording', 'connected', 'error');
+            this.statusIndicator.classList.add(state === 'pending' ? 'recording' : state);
+        }
     }
 
-    addUserMessage(text) {
-        this.currentInterlocutorElement = this.addMessage('user', text);
+    setListening(isListening) {
+        this.listening = isListening;
+        this.hideActivity();
     }
 
-    updateUserMessage(interimTranscript) {
-        if (this.currentInterlocutorElement) {
-            const contentDiv = this.currentInterlocutorElement.querySelector('.message-content');
-            contentDiv.innerHTML = this.markdownParser.parse(interimTranscript);
-            this.scrollToBottom();
+    showActivity(text) {
+        if (!this.activityIndicator) return;
+        const label = this.activityIndicator.querySelector('span');
+        if (label) label.textContent = text;
+        this.activityIndicator.classList.add('active');
+    }
+
+    hideActivity() {
+        if (!this.activityIndicator) return;
+        if (this.listening) {
+            this.showActivity('Listening...');
         } else {
-            this.currentInterlocutorElement = this.addMessage('user', interimTranscript);
+            this.activityIndicator.classList.remove('active');
         }
     }
 
-    finalizeUserMessage(finalTranscript) {
-        if (this.currentInterlocutorElement) {
-            const contentDiv = this.currentInterlocutorElement.querySelector('.message-content');
-            contentDiv.innerHTML = this.markdownParser.parse(finalTranscript);
-            this.currentInterlocutorElement = null; // Clear reference
-        } else {
-            this.addMessage('user', finalTranscript);
-        }
-        this.scrollToBottom();
+    // --- Conversation stream ---
+    renderMarkdown(text) {
+        const parser = new StreamingMarkdownParser();
+        parser.buffer = text || '';
+        return parser.finalize();
     }
 
-    updateOtherMessage(interimTranscript) {
-        // This is for other speakers in the environment (e.g., in a meeting)
-        // For simplicity, we'll just add it as a new message
-        if (this.currentInterlocutorElement && this.currentInterlocutorElement.classList.contains('other-message')) {
-            const contentDiv = this.currentInterlocutorElement.querySelector('.message-content');
-            contentDiv.innerHTML = this.markdownParser.parse(interimTranscript);
-        } else {
-            this.currentInterlocutorElement = this.addMessage('other', interimTranscript);
-        }
-        this.scrollToBottom();
+    _contentOf(messageElement) {
+        return messageElement.querySelector('.message-content');
     }
 
-    finalizeOtherMessage(finalTranscript) {
-        if (this.currentInterlocutorElement && this.currentInterlocutorElement.classList.contains('other-message')) {
-            const contentDiv = this.currentInterlocutorElement.querySelector('.message-content');
-            contentDiv.innerHTML = this.markdownParser.parse(finalTranscript);
-            this.currentInterlocutorElement = null; // Clear reference
-        } else {
-            this.addMessage('other', finalTranscript);
-        }
-        this.scrollToBottom();
+    isNearBottom() {
+        const s = this.conversationStream;
+        return !s || s.scrollHeight - s.scrollTop - s.clientHeight < NEAR_BOTTOM_PX;
     }
 
-    streamAIResponse(interimResponse) {
-        if (!this.currentAIElement || this.currentAIElement.sender !== 'ai') {
-            this.currentAIElement = this.addMessage('ai', ''); // Create new AI message container
-            this.currentAIElement.sender = 'ai'; // Mark as AI message for internal tracking
-        }
-        const contentDiv = this.currentAIElement.querySelector('.message-content');
-        this.streaming.streamContent(contentDiv, interimResponse);
-        this.scrollToBottom();
-    }
-
-    finalizeAIResponse(finalResponse) {
-        if (this.currentAIElement) {
-            const contentDiv = this.currentAIElement.querySelector('.message-content');
-            // Ensure final response is parsed as complete markdown
-            contentDiv.innerHTML = this.markdownParser.parse(finalResponse);
-            this.currentAIElement = null; // Clear reference
-        } else {
-            this.addMessage('ai', finalResponse);
-        }
-        this.scrollToBottom();
-    }
-
-    // Generic message handling for backend messages
-    handleMessage(type, payload) {
-        switch (type) {
-            case 'system_message':
-                this.showNotification(payload.message, payload.type || 'info');
-                break;
-            case 'api_key_status':
-                // Handle API key status display if needed, perhaps a subtle icon
-                devLog(`API Key Status for ${payload.service}: ${payload.valid}`);
-                this.showNotification(`API Key for ${payload.service} is ${payload.valid ? 'valid' : 'invalid'}`, payload.valid ? 'success' : 'error');
-                break;
-            case 'persona_updated':
-                devLog(`Persona updated to ${payload.persona_id}`);
-                this.showNotification(`Switched to ${this.personas[payload.persona_id]?.name || payload.persona_id} persona.`);
-                break;
-            // Add other message types as needed
-            default:
-                devLog(`[UIManager] Unhandled message type: ${type}`, payload);
-        }
-    }
-
-    // --- Utility Functions ---
     scrollToBottom() {
         if (this.conversationStream) {
             this.conversationStream.scrollTop = this.conversationStream.scrollHeight;
         }
     }
 
+    clearWelcome() {
+        const welcome = this.conversationStream?.querySelector('.initial-message');
+        if (welcome) welcome.remove();
+    }
+
+    addMessage(sender, text, { markdown = false } = {}) {
+        if (!this.conversationStream) return null;
+        this.clearWelcome();
+
+        const element = document.createElement('div');
+        element.classList.add('chat-message', `${sender}-message`);
+
+        const header = document.createElement('div');
+        header.className = 'message-sender';
+        header.textContent = SENDER_LABELS[sender] || sender;
+
+        const content = document.createElement('div');
+        content.className = 'message-content';
+        if (markdown) {
+            content.innerHTML = this.renderMarkdown(text);
+        } else {
+            content.textContent = text || '';
+        }
+
+        element.append(header, content);
+        const stick = this.isNearBottom();
+        this.conversationStream.appendChild(element);
+        if (stick) this.scrollToBottom();
+        return element;
+    }
+
+    addUserMessage(text) {
+        this.addMessage('user', text);
+    }
+
+    // Live transcript from speech-to-text: interim results update one bubble.
+    updateUserMessage(interimTranscript) {
+        if (!this.currentUserElement) {
+            this.currentUserElement = this.addMessage('user', '');
+            this.currentUserElement?.classList.add('interim');
+        }
+        if (this.currentUserElement) {
+            this._contentOf(this.currentUserElement).textContent = interimTranscript;
+        }
+    }
+
+    finalizeUserMessage(finalTranscript) {
+        if (this.currentUserElement) {
+            this._contentOf(this.currentUserElement).textContent = finalTranscript;
+            this.currentUserElement.classList.remove('interim');
+            this.currentUserElement = null;
+        } else {
+            this.addMessage('user', finalTranscript);
+        }
+    }
+
+    updateOtherMessage(interimTranscript) {
+        this.updateUserMessage(interimTranscript);
+    }
+
+    finalizeOtherMessage(finalTranscript) {
+        this.finalizeUserMessage(finalTranscript);
+    }
+
+    // --- AI answers (streamed) ---
+    beginAIMessage() {
+        this.currentAIElement = this.addMessage('ai', '');
+        this.currentAIElement?.classList.add('streaming');
+        this.aiParser = new StreamingMarkdownParser();
+    }
+
+    appendAIChunk(chunk) {
+        if (!this.currentAIElement) this.beginAIMessage();
+        if (!this.currentAIElement) return;
+        const stick = this.isNearBottom();
+        this._contentOf(this.currentAIElement).innerHTML = this.aiParser.processChunk(chunk);
+        if (stick) this.scrollToBottom();
+    }
+
+    finalizeAIResponse(answer) {
+        if (this.currentAIElement) {
+            this._contentOf(this.currentAIElement).innerHTML = this.renderMarkdown(answer);
+            this.currentAIElement.classList.remove('streaming');
+            this.currentAIElement = null;
+            this.aiParser = null;
+        } else {
+            this.addMessage('ai', answer, { markdown: true });
+        }
+        this.scrollToBottom();
+    }
+
+    discardEmptyAIMessage() {
+        if (this.currentAIElement && !this._contentOf(this.currentAIElement).textContent.trim()) {
+            this.currentAIElement.remove();
+        }
+        this.currentAIElement = null;
+        this.aiParser = null;
+    }
+
+    // --- Backend messages ---
+    handleMessage(type, payload) {
+        switch (type) {
+            case 'preset_initialized': {
+                this.sessionReady = true;
+                const preset = payload.current_preset || {};
+                const anyHealthy = Object.values(payload.health_status || {}).some(Boolean);
+                if (anyHealthy) {
+                    this.setStatus(`Ready - ${preset.provider || 'AI'} ${preset.model || ''}`.trim(), 'connected');
+                } else {
+                    this.setStatus('No working AI provider - add an API key to ai_providers.json', 'error');
+                    this.showNotification('No AI provider responded. Add a valid API key to ai_providers.json and restart.', 'error');
+                }
+                break;
+            }
+            case 'listening_state':
+                if (this.onListeningState) this.onListeningState(payload);
+                break;
+            case 'ai_processing_started':
+                this.currentAIElement = null;
+                this.aiParser = null;
+                this.showActivity('Thinking...');
+                break;
+            case 'ai_answer_chunk':
+                this.appendAIChunk(payload.chunk || '');
+                break;
+            case 'ai_answer_complete':
+                this.finalizeAIResponse(payload.answer || '');
+                this.hideActivity();
+                if (payload.error) this.showNotification('The AI provider reported an error.', 'error');
+                break;
+            case 'vision_analysis_result':
+                this.hideActivity();
+                if (payload.success) {
+                    this.addMessage('ai', payload.analysis || '', { markdown: true });
+                } else {
+                    this.showNotification(payload.error || payload.analysis || 'Screenshot analysis failed.', 'error');
+                }
+                if (typeof window.visionAnalysisResolver === 'function') window.visionAnalysisResolver(payload);
+                break;
+            case 'error':
+                this.discardEmptyAIMessage();
+                this.hideActivity();
+                this.showNotification(payload.message || 'Something went wrong.', 'error');
+                if (!this.sessionReady) this.setStatus('Not connected to an AI provider', 'error');
+                break;
+            case 'persona_updated':
+                this.showNotification(`Switched to ${this.personas[payload.persona_id]?.name || payload.persona_id} persona.`);
+                break;
+            case 'session_reset_complete':
+                this.showNotification('Session has been reset.');
+                break;
+            case 'api_key_status':
+                devLog(`API key status for ${payload.service}: ${payload.valid}`);
+                break;
+            default:
+                devLog(`[UIManager] Unhandled message type: ${type}`, payload);
+        }
+    }
+
+    // --- Utilities ---
     clearConversation() {
+        this.currentUserElement = null;
+        this.currentAIElement = null;
+        this.aiParser = null;
         if (this.conversationStream) {
             this.conversationStream.innerHTML = `
                 <div class="initial-message">
@@ -210,54 +303,17 @@ export class UIManager {
     }
 
     showNotification(message, type = 'info') {
-        // Implement a simple notification system or use an existing one
         console.log(`[Notification - ${type.toUpperCase()}]: ${message}`);
-        // For a real UI, you'd append a temporary div to the body or a notification area
-        const notificationArea = document.getElementById('notification-area'); // Assuming this exists
-        if (notificationArea) {
-            const notif = document.createElement('div');
-            notif.classList.add('notification', type);
-            notif.textContent = message;
-            notificationArea.appendChild(notif);
-            setTimeout(() => notif.remove(), 5000);
-        } else {
-            // Fallback to alert if no notification area
-            alert(message);
-        }
+        const area = document.getElementById('notification-area');
+        if (!area) return;
+        const toast = document.createElement('div');
+        toast.classList.add('notification', type);
+        toast.textContent = message;
+        area.appendChild(toast);
+        setTimeout(() => toast.remove(), 5000);
     }
 
     showErrorNotification(message) {
         this.showNotification(message, 'error');
-    }
-
-    showActivityIndicator() {
-        if (this.activityIndicator) {
-            this.activityIndicator.classList.add('active');
-        }
-    }
-
-    hideActivityIndicator() {
-        if (this.activityIndicator) {
-            this.activityIndicator.classList.remove('active');
-        }
-    }
-
-    // Replaces the check status update logic, directly manipulates UI elements if needed
-    updateCheckStatus(checkElementId, status, text) {
-        const checkElement = document.getElementById(checkElementId);
-        if (!checkElement) {
-            devWarn(`[UIManager] updateCheckStatus: Element with ID ${checkElementId} not found.`);
-            return;
-        }
-        const indicator = checkElement.querySelector('.indicator');
-        const textNode = checkElement.childNodes[1]; // Adjust if structure changes
-
-        if (indicator) {
-            indicator.textContent = status === 'success' ? '🟢' : status === 'error' ? '🔴' : '⚪';
-        }
-        if (textNode) {
-            textNode.nodeValue = ` ${text}`;
-        }
-        devLog(`[UIManager] Set ${checkElementId} to ${status}: ${text}`);
     }
 }
